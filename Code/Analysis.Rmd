@@ -1,0 +1,11 @@
+---
+title: "Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+This document presents the analysis of the data collected for our project. We will explore the data, perform statistical tests, and visualize the results to draw meaningful conclusions.
