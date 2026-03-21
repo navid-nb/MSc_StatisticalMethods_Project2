@@ -1,6 +1,8 @@
 ---
-title: "Analysis"
-output: html_document
+title: "TP2 - MATH60633A.H2026 - Statistical Methods for Financial Data "
+author: "Francis Mazzone () & Vaast Émilien (11364986)"
+date: "`r Sys.Date()`"
+output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
@@ -8,4 +10,105 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ## Introduction
+
 This document presents the analysis of the data collected for our project. We will explore the data, perform statistical tests, and visualize the results to draw meaningful conclusions.
+
+```{r libraries, message=FALSE, echo= TRUE}
+# Load necessary libraries
+library(quantmod)
+library(knitr)
+#install.packages("patchwork")
+library(patchwork)
+#install.packages("kableExtra")
+library(kableExtra)
+#install.packages("here")
+library(here)
+library(xts)
+#install.packages("PerformanceAnalytics")
+library(PerformanceAnalytics)
+library(zoo)
+#install.packages("dplyr")
+#install.packages("lubridate")
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(devtools)
+library(tidyverse)
+```
+
+```{r environment set up, message=FALSE, warning=FALSE}
+data_env <- new.env()
+source(here("Functions", "f_black_scholes.R"))
+
+file_path <- here("Data", "Raw", "Market.rda")
+stopifnot(file.exists(file_path))
+
+load(file_path, envir = data_env)
+ls(data_env)
+(data <- data_env$Market)
+
+sp500 <- data$sp500
+vix <- data$vix 
+
+rf_structure <- data.frame(
+  y_maturity = as.numeric(attr(data[["rf"]], "names")),
+  rate = as.numeric(data[["rf"]])
+)
+
+calls <- data$calls
+puts <- data$puts
+
+```
+
+## Pricing of a portfolio of options
+
+```{r define conventions, message=FALSE, warning=FALSE}
+# Define conventions
+days_in_year <- 360
+trading_days_in_year <- 250
+```
+
+We want to build a portfolio that consists of 4 European call options:
+
+-   Strike price: 1600 \| Maturity: 20 days
+-   Strike price: 1650 \| Maturity: 20 days
+-   Strike price: 1750 \| Maturity: 40 days
+-   Strike price: 1800 \| Maturity: 40 days
+
+```{r Build the portfolio, message=FALSE, warning=FALSE}
+#Underlying asset price and volatility for the options in the portfolio
+last_trading_price <- tail(sp500, 1)
+last_volatility <- tail(vix, 1) / 100 
+
+# Define the portfolio with the specified options
+maturities_day = c(20,20,40,40) 
+strike_prices = c(1600, 1650, 1750, 1800)
+
+#Build the portfolio data frame
+portfolio <- data.frame(
+  Maturity_days = maturities, 
+  Strike_Price = strike_prices,
+  Trading_Price = rep(last_trading_price, 4),
+  Volatility = rep(last_volatility, 4)
+)
+```
+
+```{r Calculate option prices, message=FALSE, warning=FALSE}
+# Calculate the option prices for each option in the portfolio using the Black-Scholes formula
+portfolio <- portfolio %>%
+  rowwise() %>%
+  mutate(
+    Call_Price = f_black_scholes(
+      S    = Trading_Price,
+      K    = Strike_Price,
+      T    = Maturity / trading_days_in_year,
+      rf_structure = rf_structure,
+      sigma = Volatility
+    ) %>% filter(Option_Type == "Call") %>% pull(Price)
+  ) %>%
+  ungroup() 
+
+portfolio
+```
+
+## One risk driver and uni-variate Gaussian Model
