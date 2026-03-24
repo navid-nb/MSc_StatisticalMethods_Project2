@@ -2,6 +2,7 @@
 .Rhistory
 .RData
 .Ruserdata
+<<<<<<< HEAD
 .DS_Store
 =======
 # Environment
@@ -17,3 +18,5 @@ renv/copy/
 
 .DS_Store
 .tex
+=======
+>>>>>>> 3920044c36b3bf289a57fbfbbe95a402f2958825
