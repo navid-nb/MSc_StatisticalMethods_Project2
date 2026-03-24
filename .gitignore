@@ -1,22 +1,16 @@
+# RStudio / R
 .Rproj.user/
 .Rhistory
 .RData
 .Ruserdata
-<<<<<<< HEAD
-.DS_Store
-=======
-# Environment
-.Rproj.user
-.Rhistory
-.RData
-.Ruserdata
 
-# renv 
+# macOS
+.DS_Store
+
+# renv
 renv/library/
 renv/staging/
 renv/copy/
 
-.DS_Store
-.tex
-=======
->>>>>>> 3920044c36b3bf289a57fbfbbe95a402f2958825
+# LaTeX
+*.tex
