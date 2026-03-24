@@ -3,3 +3,17 @@
 .RData
 .Ruserdata
 .DS_Store
+=======
+# Environment
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# renv 
+renv/library/
+renv/staging/
+renv/copy/
+
+.DS_Store
+.tex
