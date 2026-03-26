@@ -42,7 +42,6 @@ library(MASS)
 data_env <- new.env()
 source(here("Functions", "f_black_scholes.R"))
 source(here("Functions", "f_normal_scenarios.R"))
-source(here("Functions", "f_student_scenarios.R"))
 
 file_path <- here("Data", "Raw", "Market.rda")
 stopifnot(file.exists(file_path))
@@ -50,7 +49,7 @@ stopifnot(file.exists(file_path))
 load(file_path, envir = data_env)
 ls(data_env)
 
-#(data <- data_env$Market)
+data <- data_env$Market
 
 sp500 <- data$sp500
 vix <- data$vix 
@@ -394,4 +393,78 @@ ggsave(filename = here("Outputs", "copula_plot.png"),
        plot = copula_plot , width = 8, height = 5, dpi = 300) 
 ```
 
+```{r}
+
+scenarios_asset_cop <- last_trading_price * exp(corr_draws$Asset)
+scenarios_vix_cop   <- last_volatility * exp(corr_draws$VIX)
+
+#Calculate the option prices at the end of the 5 days for each scenario including vix scenarios from the copula-marginal model
+portfolio_value_five_days_ahead_copula <- mapply(function(scenarios_asset_cop, scenario_vix_cop) {
+  sum(
+    mapply(function(strike, maturity) {
+      f_black_scholes(
+        S = scenarios_asset_cop,
+        K = strike,
+        T = (maturity - 5) / trading_days_in_year,
+        rf_structure = rf_structure,
+        sigma = scenario_vix_cop        
+      ) %>% filter(Option_Type == "Call") %>% pull(Price)
+    }, portfolio$Strike_Price, portfolio$Maturity_days)
+  )
+}, scenarios_asset_cop, scenarios_vix_cop)
+
+# Calculate the P&L distribution
+pnl_distribution_copula <- portfolio_value_five_days_ahead_copula - portfolio_value_inception
+
+# Compute the VaR95 and ES95
+VaR95_copula <- quantile(pnl_distribution_copula, 0.05)
+ES95_copula  <- mean(pnl_distribution_copula[pnl_distribution_copula <= VaR95_copula])
+
+# Plot the P&L distribution
+pnl_df_copula <- data.frame(PnL = pnl_distribution_copula)
+
+pnl_distrib_plot_copula <- ggplot(pnl_df_copula, aes(x = PnL)) +
+  geom_histogram(binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
+  geom_vline(xintercept = VaR95_copula, color = "cyan", linewidth = 0.9) +
+  geom_vline(xintercept = ES95_copula,  color = "darkblue", linewidth = 0.9) +
+  annotate("text", x = VaR95_copula, y = Inf, 
+           label = paste0("VaR 95%: $", round(VaR95_copula, 2)),
+           color = "cyan", hjust = -0.1, vjust = 2, size = 3.5, fontface = "bold") +
+  annotate("text", x = ES95_copula, y = Inf,  
+           label = paste0("ES 95%: $",  round(ES95_copula, 2)),
+           color = "darkblue", hjust = -0.1, vjust = 4, size = 3.5, fontface = "bold") +
+  labs(title    = "P&L Distribution — Portfolio of European Call Options",
+       subtitle = paste0("10,000 scenarios | 5-day horizon | ",
+                         "VaR 95%: $", round(VaR95_copula, 2), 
+                         " | ES 95%: $", round(ES95_copula, 2)),
+       x = "P&L ($)", 
+       y = "Frequency",
+       caption = "Copula-marginal model — two risk drivers") +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "#566573", size = 10),
+    plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
+    panel.grid.minor = element_blank()
+  )
+
+print(pnl_distrib_plot_copula)
+
+#Save plot in the output folder
+ggsave(filename = here("Outputs", "pnl_distribution_plot_copula.png"),
+       plot = pnl_distrib_plot_copula, width = 8, height = 5, dpi = 300)
+```
+
+
+
+##Volatility Surface
+Fit a volatility surface to the implied volatilities observed on the market (traded call and put options).
+Minimize the absolute distance between the market implied volatilities and the model implied volatilities.
+The parametric surface is given by:
+      σ(m, τ ) = α1 + α2(m − 1)2 + α3(m − 1)3 + α4√τ ,
+      
+where m = K/S is the moneyness and τ is the time to maturity of the option in years.
+```{r}
+
+```
 
