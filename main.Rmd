@@ -121,16 +121,17 @@ daily_log_returns <- diff(log(sp500))[-1]
  
 #Calculate the mean and standard deviation of the daily log-returns
 #They serve as estimators for the parameters of the uni-variate Gaussian model
-mu_daily_log_returns <- mean(daily_log_returns)
-sigma_daily_log_returns <- sd(daily_log_returns)
+mu_daily_log_returns_asset <- mean(daily_log_returns)
+sigma_daily_log_returns_asset <- sd(daily_log_returns)
 
 # Generate 10,000 scenarios for the underlying asset price in 5 days using the uni-variate Gaussian model
 days_ahead <- 5
+number_of_scenarios <- 10000
 
-scenarios <- f_normal_scenarios(
-  mu_returns = mu_daily_log_returns,
-  sigma_returns = sigma_daily_log_returns,
-  n_scenarios = 10000,
+scenarios_asset <- f_normal_scenarios(
+  mu_returns = mu_daily_log_returns_asset,
+  sigma_returns = sigma_daily_log_returns_asset,
+  n_scenarios = number_of_scenarios,
   T = days_ahead,
   spot_price = last_trading_price
 )
@@ -143,7 +144,7 @@ scenarios <- f_normal_scenarios(
 
 portfolio_value_inception <- sum(portfolio$Call_Price)
 # Calculate the option prices at the end of the 5 days for each scenario
-portfolio_value_five_days_ahead <- sapply(scenarios, function(scenario_price) {
+portfolio_value_five_days_ahead <- sapply(scenarios_asset, function(scenario_price) {
   sum(
     mapply(function(strike, maturity) {
       f_black_scholes(
@@ -167,7 +168,7 @@ ES95  <- mean(pnl_distribution[pnl_distribution <= VaR95])
 # Plot the P&L distribution
 pnl_df <- data.frame(PnL = pnl_distribution)
 
-ggplot(pnl_df, aes(x = PnL)) +
+pnl_distrib_plot <- ggplot(pnl_df, aes(x = PnL)) +
   geom_histogram(binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
   geom_vline(xintercept = VaR95, color = "cyan", linewidth = 0.9) +
   geom_vline(xintercept = ES95,  color = "darkblue", linewidth = 0.9) +
@@ -191,11 +192,94 @@ ggplot(pnl_df, aes(x = PnL)) +
     plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
     panel.grid.minor = element_blank()
   )
-  
-  
+
+print(pnl_distrib_plot)
+
+#Save plot in the output folder
+ggsave(filename = here("Outputs", "pnl_distribution_plot_one_risk_driver.png"), 
+       plot = pnl_distrib_plot, width = 8, height = 5, dpi = 300) 
+
+
 ```
 
 
+## Two risk drivers and bivariate Gaussian model
+```{r}
+#Compute the log-returns for the volatility index
+daily_log_returns_vix <- diff(log(vix))[-1]
+
+#Calculate the mean and standard deviation of the daily log-returns for the volatility index
+mu_daily_log_returns_vix <- mean(daily_log_returns_vix)
+sigma_daily_log_returns_vix <- sd(daily_log_returns_vix)
+
+scenarios_vix <- f_normal_scenarios(
+  mu_returns = mu_daily_log_returns_vix,
+  sigma_returns = sigma_daily_log_returns_vix,
+  n_scenarios = number_of_scenarios,
+  T = days_ahead,
+  spot_price = last_volatility
+)
+
+
+```
+
+```{r}
+# Calculate the option prices at the end of the 5 days for each scenario including vix scenarios
+portfolio_value_five_days_ahead <- mapply(function(scenario_price, scenario_vix) {
+  sum(
+    mapply(function(strike, maturity) {
+      f_black_scholes(
+        S = scenario_price,
+        K = strike,
+        T = (maturity - 5) / trading_days_in_year,
+        rf_structure = rf_structure,
+        sigma = scenario_vix        
+      ) %>% filter(Option_Type == "Call") %>% pull(Price)
+    }, portfolio$Strike_Price, portfolio$Maturity_days)
+  )
+}, scenarios_asset, scenarios_vix)
+
+# Calculate the P&L distribution
+pnl_distribution <- portfolio_value_five_days_ahead - portfolio_value_inception
+
+# Compute the VaR95 and ES95
+VaR95 <- quantile(pnl_distribution, 0.05)
+ES95  <- mean(pnl_distribution[pnl_distribution <= VaR95])
+
+# Plot the P&L distribution
+pnl_df <- data.frame(PnL = pnl_distribution)
+
+pnl_distrib_plot <- ggplot(pnl_df, aes(x = PnL)) +
+  geom_histogram(binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
+  geom_vline(xintercept = VaR95, color = "cyan", linewidth = 0.9) +
+  geom_vline(xintercept = ES95,  color = "darkblue", linewidth = 0.9) +
+  annotate("text", x = VaR95, y = Inf, 
+           label = paste0("VaR 95%: $", round(VaR95, 2)),
+           color = "cyan", hjust = -0.1, vjust = 2, size = 3.5, fontface = "bold") +
+  annotate("text", x = ES95, y = Inf,  
+           label = paste0("ES 95%: $",  round(ES95, 2)),
+           color = "darkblue", hjust = -0.1, vjust = 4, size = 3.5, fontface = "bold") +
+  labs(title    = "P&L Distribution — Portfolio of European Call Options",
+       subtitle = paste0("10,000 scenarios | 5-day horizon | ",
+                         "VaR 95%: $", round(VaR95, 2), 
+                         " | ES 95%: $", round(ES95, 2)),
+       x = "P&L ($)", 
+       y = "Frequency",
+       caption = "Univariate Gaussian model — two risk driver") +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "#566573", size = 10),
+    plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
+    panel.grid.minor = element_blank()
+  )
+
+print(pnl_distrib_plot)
+
+#Save plot in the output folder
+ggsave(filename = here("Outputs", "pnl_distribution_plot_two_risk_driver.png"), 
+       plot = pnl_distrib_plot, width = 8, height = 5, dpi = 300) 
+```
 
 
 
