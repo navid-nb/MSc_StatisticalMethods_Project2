@@ -39,6 +39,7 @@ library(tidyverse)
 ```{r environment set up, message=FALSE, warning=FALSE}
 data_env <- new.env()
 source(here("Functions", "f_black_scholes.R"))
+source(here("Functions", "f_normal_scenarios.R"))
 
 file_path <- here("Data", "Raw", "Market.rda")
 stopifnot(file.exists(file_path))
@@ -77,8 +78,8 @@ We want to build a portfolio that consists of 4 European call options:
 
 ```{r Build the portfolio, message=FALSE, warning=FALSE}
 #Underlying asset price and volatility for the options in the portfolio
-last_trading_price <- tail(sp500, 1)
-last_volatility <- tail(vix, 1) / 100 
+last_trading_price <- coredata(tail(sp500, 1))
+last_volatility <- coredata(tail(vix, 1))
 
 # Define the portfolio with the specified options
 maturities_day = c(20,20,40,40) 
@@ -86,7 +87,7 @@ strike_prices = c(1600, 1650, 1750, 1800)
 
 #Build the portfolio data frame
 portfolio <- data.frame(
-  Maturity_days = maturities, 
+  Maturity_days = maturities_day, 
   Strike_Price = strike_prices,
   Trading_Price = rep(last_trading_price, 4),
   Volatility = rep(last_volatility, 4)
@@ -95,13 +96,15 @@ portfolio <- data.frame(
 
 ```{r Calculate option prices, message=FALSE, warning=FALSE}
 # Calculate the option prices for each option in the portfolio using the Black-Scholes formula
-portfolio <- portfolio %>%
+portfolio <- portfolio %>% 
   rowwise() %>%
   mutate(
     Call_Price = f_black_scholes(
       S    = Trading_Price,
       K    = Strike_Price,
-      T    = Maturity / trading_days_in_year,
+      T    = Maturity_days / trading_days_in_year,
+      trading_day_convention = trading_days_in_year,
+      rate_day_convention = days_in_year,
       rf_structure = rf_structure,
       sigma = Volatility
     ) %>% filter(Option_Type == "Call") %>% pull(Price)
@@ -112,3 +115,93 @@ portfolio
 ```
 
 ## One risk driver and uni-variate Gaussian Model
+```{r}
+#Computing the log-returns
+daily_log_returns <- diff(log(sp500))[-1]
+ 
+#Calculate the mean and standard deviation of the daily log-returns
+#They serve as estimators for the parameters of the uni-variate Gaussian model
+mu_daily_log_returns <- mean(daily_log_returns)
+sigma_daily_log_returns <- sd(daily_log_returns)
+
+# Generate 10,000 scenarios for the underlying asset price in 5 days using the uni-variate Gaussian model
+days_ahead <- 5
+
+scenarios <- f_normal_scenarios(
+  mu_returns = mu_daily_log_returns,
+  sigma_returns = sigma_daily_log_returns,
+  n_scenarios = 10000,
+  T = days_ahead,
+  spot_price = last_trading_price
+)
+```
+
+
+```{r}
+#Determine the P&L distribution of the book of options, using the simulated underlying values. Assume
+#the implied volatility stays the same. Take interpolated rates for the term structure.
+
+portfolio_value_inception <- sum(portfolio$Call_Price)
+# Calculate the option prices at the end of the 5 days for each scenario
+portfolio_value_five_days_ahead <- sapply(scenarios, function(scenario_price) {
+  sum(
+    mapply(function(strike, maturity) {
+      f_black_scholes(
+        S = scenario_price,
+        K = strike,
+        T = (maturity - 5) / trading_days_in_year,
+        rf_structure = rf_structure,
+        sigma = last_volatility
+      ) %>% filter(Option_Type == "Call") %>% pull(Price)
+    }, portfolio$Strike_Price, portfolio$Maturity_days)
+  )
+})
+
+# Calculate the P&L distribution
+pnl_distribution <- portfolio_value_five_days_ahead - portfolio_value_inception
+
+# Compute the VaR95 and ES95
+VaR95 <- quantile(pnl_distribution, 0.05)
+ES95  <- mean(pnl_distribution[pnl_distribution <= VaR95])
+
+# Plot the P&L distribution
+pnl_df <- data.frame(PnL = pnl_distribution)
+
+ggplot(pnl_df, aes(x = PnL)) +
+  geom_histogram(binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
+  geom_vline(xintercept = VaR95, color = "cyan", linewidth = 0.9) +
+  geom_vline(xintercept = ES95,  color = "darkblue", linewidth = 0.9) +
+  annotate("text", x = VaR95, y = Inf, 
+           label = paste0("VaR 95%: $", round(VaR95, 2)),
+           color = "cyan", hjust = -0.1, vjust = 2, size = 3.5, fontface = "bold") +
+  annotate("text", x = ES95, y = Inf,  
+           label = paste0("ES 95%: $",  round(ES95, 2)),
+           color = "darkblue", hjust = -0.1, vjust = 4, size = 3.5, fontface = "bold") +
+  labs(title    = "P&L Distribution — Portfolio of European Call Options",
+       subtitle = paste0("10,000 scenarios | 5-day horizon | ",
+                         "VaR 95%: $", round(VaR95, 2), 
+                         " | ES 95%: $", round(ES95, 2)),
+       x = "P&L ($)", 
+       y = "Frequency",
+       caption = "Univariate Gaussian model — one risk driver") +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "#566573", size = 10),
+    plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
+    panel.grid.minor = element_blank()
+  )
+  
+  
+```
+
+
+
+
+
+
+
+
+
+
+
