@@ -1,40 +1,36 @@
-
-
-f_black_scholes <- function(S, K, T, rf_structure, sigma, day_convention = 250) {
-## S: Current stock price
-## K: Strike price
-## T: Time to maturity (in years)
-## r: Risk-free interest rate
-## sigma: Volatility of the underlying asset
-## day_convention: Number of trading days in a year (default is 250)
-##rf_structure: Data frame containing the risk-free rate structure with columns 'y_maturity' and 'rate'
+f_black_scholes <- function(S, K, T, rf_structure, sigma, 
+                            trading_day_convention = 250, 
+                            rate_day_convention = 360) {
+  ## T: Time to maturity in years (using trading_day_convention)
+  ## trading_day_convention: For option maturity (default 250)
+  ## rate_day_convention: For term structure interpolation (default 365)
   
-  r = f_interpolate_rates(rf_structure, T)
+  # Convert T from trading-day years to rate-convention years for interpolation
+  T_days <- T * trading_day_convention                        # back to raw days
+  T_rate <- T_days / rate_day_convention                      # into rate convention
   
+  r <- f_interpolate_rates(rf_structure, T_rate)              # interpolate in rate convention
+  
+  # Black-Scholes uses T in trading-day convention throughout
   d1 <- (log(S / K) + (r + sigma^2 / 2) * T) / (sigma * sqrt(T))
   d2 <- d1 - sigma * sqrt(T)
   
-  #Caluclate call price using Black-Scholes formula
   price_call <- S * pnorm(d1) - K * exp(-r * T) * pnorm(d2)
-  
-  #Caclulate put price using put-call parity 
-  price_put <- price_call - S + K * exp(-r * T)
-  
-  #print(paste("Call option price (T =", T * day_convention, ", K =", K, "):", round(price_call, 3), "$"))
-  #print(paste("Put option price (T =", T * day_convention, ", K =", K, "):", round(price_put, 3), "$"))
+  price_put  <- price_call - S + K * exp(-r * T)
   
   results <- data.frame(
-    Option_Type = c("Call", "Put"),
-    Maturity_days = c(T, T) * day_convention,
-    Strike_Price = c(K, K),
+    Option_Type    = c("Call", "Put"),
+    Maturity_days  = c(T_days, T_days),
+    Strike_Price   = c(K, K),
     Risk_Free_Rate = c(r, r),
-    Volatility = c(sigma, sigma),
-    Price = c(price_call, price_put)
+    Volatility     = c(sigma, sigma),
+    Price          = c(price_call, price_put)
   )
   
-  return(results)}
+  return(results)
+}
 
-f_interpolate_rates <- function(rf_structure, T) {
+f_interpolate_rates <- function(rf_structure, T, day_convention) {
   # Interpolate the risk-free rate for the given maturity T
   if (T <= min(rf_structure$y_maturity)) {
     return(rf_structure$rate[which.min(rf_structure$y_maturity)])
