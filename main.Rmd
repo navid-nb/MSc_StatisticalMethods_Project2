@@ -251,7 +251,7 @@ pnl_distribution_biv <- portfolio_value_five_days_ahead_vix - portfolio_value_in
 
 # Compute the VaR95 and ES95
 VaR95_biv <- quantile(pnl_distribution_biv, 0.05)
-ES95_biv  <- mean(pnl_distribution_biv[pnl_distribution_biv <= VaR95])
+ES95_biv <- mean(pnl_distribution_biv[pnl_distribution_biv <= VaR95_biv])
 
 # Plot the P&L distribution
 pnl_df_biv <- data.frame(PnL = pnl_distribution_biv)
@@ -272,7 +272,7 @@ pnl_distrib_plot <- ggplot(pnl_df_biv, aes(x = PnL)) +
                          " | ES 95%: $", round(ES95_biv, 2)),
        x = "P&L ($)", 
        y = "Frequency",
-       caption = "Univariate Gaussian model — two risk driver") +
+       caption = "Bivariate Gaussian model — two risk drivers") +
   theme_minimal(base_size = 12) +
   theme(
     plot.title    = element_text(face = "bold", size = 14),
@@ -544,7 +544,7 @@ ggplot(slice_data, aes(x = Moneyness, y = IV, color = factor(Tau_label))) +
   )
 #Save plot in the output folder
 ggsave(filename = here("Outputs", "fitted_vol_surface_slices.png"),
-       plot = last_plot(), width = 8, height = 5, dpi = 300)
+       plot = last_plot(), width = 8, height = 5, dpi = 300) ###needs fix
 ```
 
 

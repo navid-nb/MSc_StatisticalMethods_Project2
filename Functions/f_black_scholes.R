@@ -30,7 +30,7 @@ f_black_scholes <- function(S, K, T, rf_structure, sigma,
   return(results)
 }
 
-f_interpolate_rates <- function(rf_structure, T, day_convention) {
+f_interpolate_rates <- function(rf_structure, T) {
   # Interpolate the risk-free rate for the given maturity T
   if (T <= min(rf_structure$y_maturity)) {
     return(rf_structure$rate[which.min(rf_structure$y_maturity)])
