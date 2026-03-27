@@ -36,12 +36,16 @@ library(devtools)
 library(tidyverse)
 #install.packages("MASS")
 library(MASS)
+#install.packages("plotly")
+library(plotly)
+library(dplyr)
 ```
 
 ```{r environment set up, message=FALSE, warning=FALSE}
 data_env <- new.env()
 source(here("Functions", "f_black_scholes.R"))
 source(here("Functions", "f_normal_scenarios.R"))
+source(here("Functions", "f_fit_vol_surface.R"))
 
 file_path <- here("Data", "Raw", "Market.rda")
 stopifnot(file.exists(file_path))
@@ -458,13 +462,159 @@ ggsave(filename = here("Outputs", "pnl_distribution_plot_copula.png"),
 
 
 ##Volatility Surface
+
 Fit a volatility surface to the implied volatilities observed on the market (traded call and put options).
 Minimize the absolute distance between the market implied volatilities and the model implied volatilities.
 The parametric surface is given by:
       σ(m, τ ) = α1 + α2(m − 1)2 + α3(m − 1)3 + α4√τ ,
       
 where m = K/S is the moneyness and τ is the time to maturity of the option in years.
-```{r}
+```{r Prepare data for volatility surface fitting, message=FALSE, warning=FALSE}
+# Combine calls and puts, calculate moneyness
+options_data <- bind_rows(
+  as.data.frame(calls) %>% mutate(Type = "Call"),
+  as.data.frame(puts)  %>% mutate(Type = "Put")
+) %>%
+  mutate(Moneyness = K / last_trading_price) %>%
+  dplyr::select(
+    Type,
+    Strike_Price= K,
+    Implied_Volatility = IV,
+    Moneyness,
+    Tau = tau
+  )
+```
 
+```{r}
+#Initialize the parameter vector for the optimization, we can start with some reasonable guesses based on the typical shape of volatility surfaces (e.g., a slight smile or skew).
+
+a1 <- coredata(last_volatility) # Starting point for the overall level of volatility
+
+#We do not have much prior to guess the curvature and asymmetry of the smile/skew, so we can start with small positive values for a2 and a3, which would correspond to a slight smile/skew. The term structure effect (a4) can also be initialized with a small positive value, as volatility often increases with time to maturity.
+
+a2 <- 0.1 
+a3 <- 0.1 
+a4 <- 0.1 
+
+alpha_init <- c(a1, a2, a3, a4)
+
+# Optimize the parameters of the volatility surface by minimizing the objective function
+optimization <- optim(
+  par    = alpha_init,
+  fn     = f_objective,
+  data   = options_data,
+  method = "Nelder-Mead"
+)
+
+alpha_hat <- optimization$par
+
+names(alpha_hat) <- c("alpha1", "alpha2", "alpha3", "alpha4")
+
+print(alpha_hat)
+```
+
+```{r}
+#Visualize the fitted volatility surface by plotting slices of the surface at different maturities (τ) against moneyness (m). This will allow us to see how well the fitted surface captures the shape of the implied volatility across different strikes and maturities.
+moneyness_seq <- seq(0.7, 1.3, length.out = 200)
+tau_slices    <- c(0.08, 0.25, 0.50, 1.00, 2.00)
+
+slice_data <- expand.grid(Moneyness = moneyness_seq, Tau = tau_slices) %>%
+  mutate(
+    IV    = f_vol_surface(alpha_hat, Moneyness, Tau),
+    Tau_label = paste0("τ = ", Tau, " yr")
+  )
+
+ggplot(slice_data, aes(x = Moneyness, y = IV, color = factor(Tau_label))) +
+  geom_line(linewidth = 0.9) +
+  scale_color_brewer(palette = "RdYlBu", name = "Maturity") +
+  labs(
+    title    = "Fitted Volatility Surface — Moneyness Slices",
+    subtitle = paste0("α1=", round(alpha_hat[1],3), 
+                      " | α2=", round(alpha_hat[2],3),
+                      " | α3=", round(alpha_hat[3],3),
+                      " | α4=", round(alpha_hat[4],3)),
+    x = "Moneyness (K/S)",
+    y = "Implied Volatility"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "#566573", size = 10),
+    panel.grid.minor = element_blank()
+  )
+#Save plot in the output folder
+ggsave(filename = here("Outputs", "fitted_vol_surface_slices.png"),
+       plot = last_plot(), width = 8, height = 5, dpi = 300)
+```
+
+
+
+
+===========================Annexe=================================
+
+```{r visualize the volatility surface, message=FALSE, warning=FALSE}
+# Cleaning filters — kept separate so options_data remains intact
+IV_MAX        <- 0.8
+MONEYNESS_MIN <- 0.7
+MONEYNESS_MAX <- 1.3
+CALL_M_MAX    <- 1.15
+PUT_M_MIN     <- 0.85
+
+options_data_clean <- options_data %>%
+  filter(Implied_Volatility < IV_MAX,
+         Moneyness > MONEYNESS_MIN,
+         Moneyness < MONEYNESS_MAX)
+
+options_data_calls <- options_data_clean %>% filter(Type == "Call", Moneyness < CALL_M_MAX)
+options_data_puts  <- options_data_clean %>% filter(Type == "Put",  Moneyness > PUT_M_MIN)
+
+# Shared fitted surface grid
+f_make_surface_grid <- function(data) {
+  moneyness_grid <- seq(min(data$Moneyness), max(data$Moneyness), length.out = 50)
+  tau_grid       <- seq(min(data$Tau),       max(data$Tau),       length.out = 50)
+  surface_grid   <- outer(moneyness_grid, tau_grid, function(m, tau) f_vol_surface(alpha_hat, m, tau))
+  list(m = moneyness_grid, tau = tau_grid, z = surface_grid)
+}
+
+# Shared plot builder
+f_vol_surface_plot <- function(data, title) {
+  grid <- f_make_surface_grid(data)
+  plot_ly() %>%
+    add_surface(
+      x = grid$m, y = grid$tau, z = t(grid$z),
+      opacity    = 0.6,
+      colorscale = list(c(0, 1), c("#2C3E50", "#E74C3C")),
+      showscale  = FALSE,
+      name       = "Fitted Surface"
+    ) %>%
+    add_trace(
+      data = data,
+      x = ~Moneyness, y = ~Tau, z = ~Implied_Volatility,
+      type = "scatter3d", mode = "markers",
+      marker = list(
+        size       = 2,
+        color      = ~Implied_Volatility,
+        colorscale = list(c(0, 1), c("#AEB6BF", "#E74C3C")),
+        showscale  = TRUE,
+        colorbar   = list(title = "IV")
+      ),
+      name = "Market IV"
+    ) %>%
+    layout(
+      title = title,
+      scene = list(
+        xaxis  = list(title = "Moneyness (K/S)"),
+        yaxis  = list(title = "Tau (years)"),
+        zaxis  = list(title = "Implied Volatility"),
+        camera = list(eye = list(x = 1.8, y = -1.8, z = 0.8))
+      )
+    )
+}
+
+vol_surface_calls <- f_vol_surface_plot(options_data_calls, "Implied Volatility Surface — Calls")
+vol_surface_puts  <- f_vol_surface_plot(options_data_puts,  "Implied Volatility Surface — Puts")
+
+vol_surface_calls
+vol_surface_puts
 ```
 
