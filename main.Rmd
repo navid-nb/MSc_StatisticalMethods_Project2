@@ -97,7 +97,7 @@ portfolio <- data.frame(
   Maturity_days = maturities_day, 
   Strike_Price = strike_prices,
   Trading_Price = rep(last_trading_price, 4),
-  Volatility = rep(last_volatility, 4)
+  Volatility_last_vix = rep(last_volatility, 4)
 )
 ```
 
@@ -113,7 +113,7 @@ portfolio <- portfolio %>%
       trading_day_convention = trading_days_in_year,
       rate_day_convention = days_in_year,
       rf_structure = rf_structure,
-      sigma = Volatility
+      sigma = Volatility_last_vix
     ) %>% filter(Option_Type == "Call") %>% pull(Price)
   ) %>%
   ungroup() 
@@ -547,8 +547,52 @@ ggsave(filename = here("Outputs", "fitted_vol_surface_slices.png"),
        plot = last_plot(), width = 8, height = 5, dpi = 300) ###needs fix
 ```
 
+Re-price the portfolio using the parametric model. Once you have fitted the volatility surface, consider
+˜σ(m, τ ) = σ(m, τ ) − (α1 + α4) + VIXT , where VIXT is the VIX at time T . Use this for the pricing at
+time T . For the pricing at T + 5, consider ˜σ(m, τ ) = σ(m, τ ) − (α1 + α4) + VIXT +5 where VIXT +5 is
+obtained by simulation.
 
+```{r}
+# Re-price the portfolio using the fitted volatility surface
+portfolio <- portfolio %>% mutate(Moneyness = Strike_Price / last_trading_price)
+portfolio <- portfolio %>% mutate(Tau = Maturity_days / trading_days_in_year)
 
+portfolio_scenarios <- map_dfr(seq_along(scenarios_vix), function(s) {
+  portfolio %>%
+    rowwise() %>%
+    mutate(
+      Fitted_IV = f_vol_surface(alpha_hat, Moneyness, Tau),
+      Adjusted_IV_T = Fitted_IV - (alpha_hat[1] + alpha_hat[4]) + last_volatility,
+      Adjusted_IV_T_plus_5 = Fitted_IV - (alpha_hat[1] + alpha_hat[4]) + scenarios_vix[s],
+      Scenario = s
+    ) %>%
+    ungroup()
+})
+```
+
+```{r}
+#Calculate the option prices at time T and T+5 using the adjusted implied volatilities from the fitted surface
+portfolio_scenarios <- portfolio_scenarios %>%
+  rowwise() %>%
+  mutate(
+    Price_T = f_black_scholes(
+      S = last_trading_price,
+      K = Strike_Price,
+      T = Maturity_days / trading_days_in_year,
+      rf_structure = rf_structure,
+      sigma = Adjusted_IV_T
+    ) %>% filter(Option_Type == "Call") %>% pull(Price),
+    Price_T_plus_5 = f_black_scholes(
+      S = last_trading_price,
+      K = Strike_Price,
+      T = (Maturity_days - 5) / trading_days_in_year,
+      rf_structure = rf_structure,
+      sigma = Adjusted_IV_T_plus_5
+    ) %>% filter(Option_Type == "Call") %>% pull(Price)
+  ) %>%
+  ungroup()
+
+```
 
 ===========================Annexe=================================
 
