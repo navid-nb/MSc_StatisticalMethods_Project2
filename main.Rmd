@@ -145,6 +145,8 @@ scenarios_asset <- f_normal_scenarios(
 ```
 
 
+To complement the frequency histograms below, we overlay a kernel density estimate (KDE) on each P&L distribution. The KDE is computed with Silverman's rule-of-thumb bandwidth and places a smooth kernel (Gaussian by default in `geom_density`) at each observation, then sums the contributions. The resulting curve gives a continuous reading of the distribution shape and makes it easier to compare across models. The main caveat is that smoothing is indifferent to the underlying data structure: a wide bandwidth will wash out genuine secondary modes or sharp asymmetries that the raw histogram would reveal. We therefore keep the histogram as the primary visual and treat the density curve as a reading aid, not a replacement.
+
 ```{r}
 #Determine the P&L distribution of the book of options, using the simulated underlying values. Assume
 #the implied volatility stays the same. Take interpolated rates for the term structure.
@@ -176,7 +178,9 @@ ES95  <- mean(pnl_distribution[pnl_distribution <= VaR95])
 pnl_df <- data.frame(PnL = pnl_distribution)
 
 pnl_distrib_plot <- ggplot(pnl_df, aes(x = PnL)) +
-  geom_histogram(binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
+  geom_histogram(aes(y = after_stat(density)),
+                 binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
+  geom_density(color = "#E74C3C", linewidth = 0.8, adjust = 1) +
   geom_vline(xintercept = VaR95, color = "cyan", linewidth = 0.9) +
   geom_vline(xintercept = ES95,  color = "darkblue", linewidth = 0.9) +
   annotate("text", x = VaR95, y = Inf, 
@@ -190,8 +194,8 @@ pnl_distrib_plot <- ggplot(pnl_df, aes(x = PnL)) +
                          "VaR 95%: $", round(VaR95, 2), 
                          " | ES 95%: $", round(ES95, 2)),
        x = "P&L ($)", 
-       y = "Frequency",
-       caption = "Univariate Gaussian model — one risk driver") +
+       y = "Density",
+       caption = "Univariate Gaussian model — one risk driver | Red curve: KDE (Silverman bandwidth)") +
   theme_minimal(base_size = 12) +
   theme(
     plot.title    = element_text(face = "bold", size = 14),
@@ -257,7 +261,9 @@ ES95_biv <- mean(pnl_distribution_biv[pnl_distribution_biv <= VaR95_biv])
 pnl_df_biv <- data.frame(PnL = pnl_distribution_biv)
 
 pnl_distrib_plot <- ggplot(pnl_df_biv, aes(x = PnL)) +
-  geom_histogram(binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
+  geom_histogram(aes(y = after_stat(density)),
+                 binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
+  geom_density(color = "#E74C3C", linewidth = 0.8, adjust = 1) +
   geom_vline(xintercept = VaR95_biv, color = "cyan", linewidth = 0.9) +
   geom_vline(xintercept = ES95_biv,  color = "darkblue", linewidth = 0.9) +
   annotate("text", x = VaR95_biv, y = Inf, 
@@ -271,8 +277,8 @@ pnl_distrib_plot <- ggplot(pnl_df_biv, aes(x = PnL)) +
                          "VaR 95%: $", round(VaR95_biv, 2), 
                          " | ES 95%: $", round(ES95_biv, 2)),
        x = "P&L ($)", 
-       y = "Frequency",
-       caption = "Bivariate Gaussian model — two risk drivers") +
+       y = "Density",
+       caption = "Bivariate Gaussian model — two risk drivers | Red curve: KDE (Silverman bandwidth)") +
   theme_minimal(base_size = 12) +
   theme(
     plot.title    = element_text(face = "bold", size = 14),
@@ -428,7 +434,9 @@ ES95_copula  <- mean(pnl_distribution_copula[pnl_distribution_copula <= VaR95_co
 pnl_df_copula <- data.frame(PnL = pnl_distribution_copula)
 
 pnl_distrib_plot_copula <- ggplot(pnl_df_copula, aes(x = PnL)) +
-  geom_histogram(binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
+  geom_histogram(aes(y = after_stat(density)),
+                 binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
+  geom_density(color = "#E74C3C", linewidth = 0.8, adjust = 1) +
   geom_vline(xintercept = VaR95_copula, color = "cyan", linewidth = 0.9) +
   geom_vline(xintercept = ES95_copula,  color = "darkblue", linewidth = 0.9) +
   annotate("text", x = VaR95_copula, y = Inf, 
@@ -442,8 +450,8 @@ pnl_distrib_plot_copula <- ggplot(pnl_df_copula, aes(x = PnL)) +
                          "VaR 95%: $", round(VaR95_copula, 2), 
                          " | ES 95%: $", round(ES95_copula, 2)),
        x = "P&L ($)", 
-       y = "Frequency",
-       caption = "Copula-marginal model — two risk drivers") +
+       y = "Density",
+       caption = "Copula-marginal model — two risk drivers | Red curve: KDE (Silverman bandwidth)") +
   theme_minimal(base_size = 12) +
   theme(
     plot.title    = element_text(face = "bold", size = 14),
@@ -591,8 +599,103 @@ portfolio_scenarios <- portfolio_scenarios %>%
     ) %>% filter(Option_Type == "Call") %>% pull(Price)
   ) %>%
   ungroup()
-
 ```
+
+
+```{r}
+portfolio_value_surface <- portfolio_scenarios %>%
+  group_by(Scenario) %>%
+  summarise(
+    Value_T        = sum(Price_T),
+    Value_T_plus_5 = sum(Price_T_plus_5),
+    .groups = "drop"
+  )
+
+pnl_distribution_surface <- portfolio_value_surface$Value_T_plus_5 - portfolio_value_inception
+
+VaR95_surface <- quantile(pnl_distribution_surface, 0.05)
+ES95_surface  <- mean(pnl_distribution_surface[pnl_distribution_surface <= VaR95_surface])
+```
+
+```{r}
+# Overlay: one-driver vs two-drivers (comparable distributions — both simulate spot)
+pnl_combined_two <- data.frame(
+  PnL   = c(pnl_distribution, pnl_distribution_biv),
+  Model = rep(c("One driver", "Two drivers"), each = number_of_scenarios)
+)
+
+model_colors_two <- c("One driver"  = "#8E44AD",
+                      "Two drivers" = "#E74C3C")
+
+pnl_overlay_plot <- ggplot(pnl_combined_two, aes(x = PnL, color = Model)) +
+  geom_density(linewidth = 0.9, adjust = 1) +
+  geom_vline(xintercept = VaR95,     color = "#8E44AD", linewidth = 0.7, linetype = "dashed") +
+  geom_vline(xintercept = VaR95_biv, color = "#E74C3C", linewidth = 0.7, linetype = "dashed") +
+  scale_color_manual(values = model_colors_two, name = "Model") +
+  labs(
+    title    = "P&L Distribution — One vs Two Risk Drivers",
+    subtitle = paste0(
+      "One driver — VaR: $",  round(VaR95, 2),     " | ES: $", round(ES95, 2),     "  //  ",
+      "Two drivers — VaR: $", round(VaR95_biv, 2), " | ES: $", round(ES95_biv, 2)
+    ),
+    x       = "P&L ($)",
+    y       = "Density",
+    caption = "10,000 scenarios | 5-day horizon | KDE curves (Silverman bandwidth) | Dashed verticals: VaR 95%"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "#566573", size = 9),
+    plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
+    panel.grid.minor = element_blank(),
+    legend.position  = "top"
+  )
+
+print(pnl_overlay_plot)
+
+ggsave(filename = here("Outputs", "pnl_overlay_one_vs_two_drivers.png"),
+       plot = pnl_overlay_plot, width = 9, height = 5, dpi = 300)
+```
+
+```{r}
+# Standalone: vol surface model — vol risk only, spot held fixed
+pnl_df_surface <- data.frame(PnL = pnl_distribution_surface)
+
+pnl_surface_plot <- ggplot(pnl_df_surface, aes(x = PnL)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 binwidth = 0.5, fill = "#27AE60", color = "#AEB6BF", alpha = 0.85) +
+  geom_density(color = "#E74C3C", linewidth = 0.8, adjust = 1) +
+  geom_vline(xintercept = VaR95_surface, color = "cyan",     linewidth = 0.9) +
+  geom_vline(xintercept = ES95_surface,  color = "darkblue", linewidth = 0.9) +
+  annotate("text", x = VaR95_surface, y = Inf,
+           label = paste0("VaR 95%: $", round(VaR95_surface, 2)),
+           color = "cyan", hjust = -0.1, vjust = 2, size = 3.5, fontface = "bold") +
+  annotate("text", x = ES95_surface, y = Inf,
+           label = paste0("ES 95%: $",  round(ES95_surface, 2)),
+           color = "darkblue", hjust = -0.1, vjust = 4, size = 3.5, fontface = "bold") +
+  labs(
+    title    = "P&L Distribution — Volatility Surface Model",
+    subtitle = paste0("10,000 scenarios | 5-day horizon | ",
+                      "VaR 95%: $", round(VaR95_surface, 2),
+                      " | ES 95%: $", round(ES95_surface, 2)),
+    x       = "P&L ($)",
+    y       = "Density",
+    caption = "Vol surface model — vol risk only, spot held fixed | Red curve: KDE (Silverman bandwidth)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title    = element_text(face = "bold", size = 14),
+    plot.subtitle = element_text(color = "#566573", size = 10),
+    plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
+    panel.grid.minor = element_blank()
+  )
+
+print(pnl_surface_plot)
+
+ggsave(filename = here("Outputs", "pnl_distribution_vol_surface.png"),
+       plot = pnl_surface_plot, width = 8, height = 5, dpi = 300)
+```
+
 
 ===========================Annexe=================================
 
