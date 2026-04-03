@@ -1,4 +1,4 @@
----
+# ---
 title: "TP2 - MATH60633A.H2026 - Statistical Methods for Financial Data "
 author: "Francis Mazzone () & Vaast Émilien (11364986)"
 date: "`r Sys.Date()`"
@@ -15,30 +15,15 @@ This document presents the analysis of the data collected for our project. We wi
 
 ```{r libraries, message=FALSE, echo= TRUE}
 # Load necessary libraries
-library(quantmod)
 library(knitr)
-#install.packages("patchwork")
 library(patchwork)
-#install.packages("kableExtra")
-library(kableExtra)
-#install.packages("here")
 library(here)
 library(xts)
-#install.packages("PerformanceAnalytics")
-library(PerformanceAnalytics)
-library(zoo)
-#install.packages("dplyr")
-#install.packages("lubridate")
 library(dplyr)
-library(lubridate)
+library(purrr)
 library(ggplot2)
-library(devtools)
-library(tidyverse)
-#install.packages("MASS")
 library(MASS)
-#install.packages("plotly")
 library(plotly)
-library(dplyr)
 ```
 
 ```{r environment set up, message=FALSE, warning=FALSE}
@@ -65,6 +50,10 @@ rf_structure <- data.frame(
 
 calls <- data$calls
 puts <- data$puts
+
+# check class of all 
+data_classes <- sapply(data, class)
+print(data_classes)
 
 ```
 
