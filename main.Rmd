@@ -30,8 +30,10 @@ library(plotly)
 data_env <- new.env()
 source(here("Functions", "f_black_scholes.R"))
 source(here("Functions", "f_normal_scenarios.R"))
+source(here("Functions", "f_normal_scenarios_bivar.R"))
 source(here("Functions", "f_fit_vol_surface.R"))
 source(here("Functions", "f_pnl_univariate.R"))
+source(here("Functions", "f_pnl_bivariate.R"))
 
 file_path <- here("Data", "Raw", "Market.rda")
 stopifnot(file.exists(file_path))
@@ -184,80 +186,50 @@ daily_log_returns_vix <- diff(log(vix))[-1]
 mu_daily_log_returns_vix <- mean(daily_log_returns_vix)
 sigma_daily_log_returns_vix <- sd(daily_log_returns_vix)
 
-scenarios_vix <- f_normal_scenarios(
-  mu_returns = mu_daily_log_returns_vix,
-  sigma_returns = sigma_daily_log_returns_vix,
-  n_scenarios = number_of_scenarios,
-  T = days_ahead,
-  spot_price = last_volatility
+# Proper bivariate Gaussian model: simulate (S, VIX) jointly with correlation
+rho_gaussian <- cor(as.numeric(daily_log_returns), as.numeric(daily_log_returns_vix))
+scenarios_biv <- f_normal_scenarios_bivar(
+  mu_returns    = c(mu_daily_log_returns_asset, mu_daily_log_returns_vix),
+  sigma_returns = c(sigma_daily_log_returns_asset, sigma_daily_log_returns_vix),
+  corr_matrix   = matrix(c(1, rho_gaussian, rho_gaussian, 1), nrow = 2, byrow = TRUE),
+  n_scenarios   = number_of_scenarios,
+  T            = days_ahead,
+  spot_price   = c(last_trading_price, last_volatility)
 )
 
+scenarios_asset_biv <- scenarios_biv[, 1]
+scenarios_vix       <- scenarios_biv[, 2]
+
 
 ```
 
 ```{r}
-# Calculate the option prices at the end of the 5 days for each scenario including vix scenarios
-portfolio_value_five_days_ahead_vix <- mapply(function(scenario_price, scenario_vix) {
-  sum(
-    mapply(function(strike, maturity) {
-      f_black_scholes(
-        S = scenario_price,
-        K = strike,
-        T = (maturity - 5) / trading_days_in_year,
-        rf_structure = rf_structure,
-        sigma = scenario_vix        
-      ) %>% filter(Option_Type == "Call") %>% pull(Price)
-    }, portfolio$Strike_Price, portfolio$Maturity_days)
-  )
-}, scenarios_asset, scenarios_vix)
+# Calculate P&L Distribution using bivariate model
+pnl_results_bivariate <- calculate_pnl_bivariate(
+  scenarios_asset = scenarios_asset_biv,
+  scenarios_vix = scenarios_vix,
+  portfolio = portfolio,
+  rf_structure = rf_structure,
+  trading_days_in_year = trading_days_in_year,
+  portfolio_value_inception = portfolio_value_inception
+)
 
-# Calculate the P&L distribution
-pnl_distribution_biv <- portfolio_value_five_days_ahead_vix - portfolio_value_inception
+pnl_distribution_biv <- pnl_results_bivariate$pnl_distribution
+VaR95_biv <- pnl_results_bivariate$VaR95
+ES95_biv <- pnl_results_bivariate$ES95
 
-# Compute the VaR95 and ES95
-VaR95_biv <- quantile(pnl_distribution_biv, 0.05)
-ES95_biv <- mean(pnl_distribution_biv[pnl_distribution_biv <= VaR95_biv])
-
-# Plot the P&L distribution
-pnl_df_biv <- data.frame(PnL = pnl_distribution_biv)
-
-pnl_distrib_plot <- ggplot(pnl_df_biv, aes(x = PnL)) +
-  geom_histogram(aes(y = after_stat(density)),
-                 binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
-  geom_density(color = "#E74C3C", linewidth = 0.8, adjust = 1) +
-  geom_vline(xintercept = VaR95_biv, color = "cyan", linewidth = 0.9) +
-  geom_vline(xintercept = ES95_biv,  color = "darkblue", linewidth = 0.9) +
-  annotate("text", x = VaR95_biv, y = Inf, 
-           label = paste0("VaR 95%: $", round(VaR95_biv, 2)),
-           color = "cyan", hjust = -0.1, vjust = 2, size = 3.5, fontface = "bold") +
-  annotate("text", x = ES95_biv, y = Inf,  
-           label = paste0("ES 95%: $",  round(ES95_biv, 2)),
-           color = "darkblue", hjust = -0.1, vjust = 4, size = 3.5, fontface = "bold") +
-  labs(title    = "P&L Distribution — Portfolio of European Call Options",
-       subtitle = paste0("10,000 scenarios | 5-day horizon | ",
-                         "VaR 95%: $", round(VaR95_biv, 2), 
-                         " | ES 95%: $", round(ES95_biv, 2)),
-       x = "P&L ($)", 
-       y = "Density",
-       caption = "Bivariate Gaussian model — two risk drivers | Red curve: KDE (Silverman bandwidth)") +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title    = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "#566573", size = 10),
-    plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
-    panel.grid.minor = element_blank()
-  )
-
-print(pnl_distrib_plot)
-
-#Save plot in the output folder
-ggsave(filename = here("Outputs", "pnl_distribution_plot_two_risk_driver.png"), 
-       plot = pnl_distrib_plot, width = 8, height = 5, dpi = 300) 
+# Plot and save
+pnl_distrib_plot <- plot_pnl_bivariate(
+  pnl_distribution = pnl_distribution_biv,
+  VaR95 = VaR95_biv,
+  ES95 = ES95_biv,
+  output_path = here("Outputs", "pnl_distribution_plot_two_risk_driver.png")
+)
 ```
 
 ```{r}
-#Sanity check, both PnL distribution are very similar but not identical
-#Here is the overlaid visualization of the two P&L distributions, we can see that the bivariate model has a slightly wider distribution, which is consistent with the fact that it incorporates more risk factors.
+#Sanity check, both PnL distribution are similar but not identical
+#Here is the overlaid visualization of the two P&L distributions. For a long call portfolio, you’re delta-positive (hurt when S&P drops) and vega-positive (helped when implied vol/VIX rises). Our fitted dependence is the usual negative correlation between S&P returns and VIX returns, then in bad equity scenarios (SP500 down), we tend to also get VIX up (additionally the VIX would shoot up when SP500 drops due to the leverage effect). This partially offsets losses, so the two-driver VaR/ES is less negative than the univariate “vol fixed” model. 
 pnl_combined <- data.frame(
   PnL   = c(pnl_distribution, pnl_distribution_biv),
   Model = rep(c("One driver", "Two drivers"), each = 10000)
@@ -725,4 +697,3 @@ vol_surface_puts  <- f_vol_surface_plot(options_data_puts,  "Implied Volatility 
 vol_surface_calls
 vol_surface_puts
 ```
-
