@@ -34,7 +34,7 @@ calculate_pnl_bivariate <- function(scenarios_asset,
         S = spot_h,
         K = portfolio$Strike_Price[alive],
         T = T_remaining[alive],
-        rf_structure = rf_structure,
+        rf_structure = rf_structure_forward,
         sigma = rep(vol_h, sum(alive)),
         trading_day_convention = trading_days_in_year
       )

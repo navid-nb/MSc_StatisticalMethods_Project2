@@ -209,7 +209,7 @@ pnl_results_bivariate <- calculate_pnl_bivariate(
   scenarios_asset = scenarios_asset_biv,
   scenarios_vix = scenarios_vix,
   portfolio = portfolio,
-  rf_structure = rf_structure,
+  rf_structure = rf_structure_forward,
   trading_days_in_year = trading_days_in_year,
   portfolio_value_inception = portfolio_value_inception
 )
