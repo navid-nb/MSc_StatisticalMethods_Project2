@@ -124,3 +124,27 @@ f_black_scholes_vectorized <- function(S, K, T, rf_structure, sigma,
   
   return(price_call)
 }
+
+f_calculate_forward_rates <- function(rf_structure, days_passed, trading_days_in_year) {
+  ## Convert t=0 spot rate term structure to forward rates from (t=0 + days_passed) onward
+  ##
+  ## Parameters:
+  ##   rf_structure (data.frame): Term structure at t=0 with columns y_maturity, rate
+  ##   days_passed (numeric): Days elapsed (e.g., 5) to forward from
+  ##   trading_days_in_year (numeric): Day convention (typically 250)
+  ##
+  ## Returns:
+  ##   data.frame: Forward rate term structure with new y_maturity (remaining time) and forward rates
+  ##
+  ## Formula (continuously compounded):
+  ##   f(t,T) = [r(T) * T - r(t) * t] / (T - t)
+  
+  t <- days_passed / trading_days_in_year
+  r_t <- f_interpolate_rates(rf_structure, t)
+  
+  forward_rates <- (rf_structure$rate * rf_structure$y_maturity - r_t * t) / 
+                   (rf_structure$y_maturity - t)
+  
+  data.frame(y_maturity = rf_structure$y_maturity - t,
+             rate = forward_rates)
+}

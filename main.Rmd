@@ -138,14 +138,20 @@ scenarios_asset <- f_normal_scenarios(
 
 To complement the frequency histograms below, we overlay a kernel density estimate (KDE) on each P&L distribution. The KDE is computed with Silverman's rule-of-thumb bandwidth and places a smooth kernel (Gaussian by default in `geom_density`) at each observation, then sums the contributions. The resulting curve gives a continuous reading of the distribution shape and makes it easier to compare across models. The main caveat is that smoothing is indifferent to the underlying data structure: a wide bandwidth will wash out genuine secondary modes or sharp asymmetries that the raw histogram would reveal. We therefore keep the histogram as the primary visual and treat the density curve as a reading aid, not a replacement.
 
+At t=5, the original interest rates quoted at t=0 are converted to forward rates for accurate option revaluation. We derive the forward curve from the original term structure, which accounts for the time passage and ensures correct discounting of future cash flows.
+
+
 ```{r}
+
+rf_structure_forward <- f_calculate_forward_rates(rf_structure, days_ahead, trading_days_in_year)
+
 # Calculate P&L Distribution using univariate model
 portfolio_value_inception <- sum(portfolio$Call_Price)
 
 pnl_results_univariate <- calculate_pnl_univariate(
   scenarios_asset = scenarios_asset,
   portfolio = portfolio,
-  rf_structure = rf_structure,
+  rf_structure = rf_structure_forward,
   trading_days_in_year = trading_days_in_year,
   last_volatility = last_volatility,
   portfolio_value_inception = portfolio_value_inception
