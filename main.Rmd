@@ -31,6 +31,7 @@ data_env <- new.env()
 source(here("Functions", "f_black_scholes.R"))
 source(here("Functions", "f_normal_scenarios.R"))
 source(here("Functions", "f_fit_vol_surface.R"))
+source(here("Functions", "f_pnl_univariate.R"))
 
 file_path <- here("Data", "Raw", "Market.rda")
 stopifnot(file.exists(file_path))
@@ -118,7 +119,8 @@ daily_log_returns <- diff(log(sp500))[-1]
 #Calculate the mean and standard deviation of the daily log-returns
 #They serve as estimators for the parameters of the uni-variate Gaussian model
 mu_daily_log_returns_asset <- mean(daily_log_returns)
-sigma_daily_log_returns_asset <- sd(daily_log_returns)
+n_asset <- length(daily_log_returns)
+sigma_daily_log_returns_asset <- sd(daily_log_returns) * sqrt((n_asset - 1) / n_asset)  # MLE adjustment
 
 # Generate 10,000 scenarios for the underlying asset price in 5 days using the uni-variate Gaussian model
 days_ahead <- 5
@@ -137,70 +139,34 @@ scenarios_asset <- f_normal_scenarios(
 To complement the frequency histograms below, we overlay a kernel density estimate (KDE) on each P&L distribution. The KDE is computed with Silverman's rule-of-thumb bandwidth and places a smooth kernel (Gaussian by default in `geom_density`) at each observation, then sums the contributions. The resulting curve gives a continuous reading of the distribution shape and makes it easier to compare across models. The main caveat is that smoothing is indifferent to the underlying data structure: a wide bandwidth will wash out genuine secondary modes or sharp asymmetries that the raw histogram would reveal. We therefore keep the histogram as the primary visual and treat the density curve as a reading aid, not a replacement.
 
 ```{r}
-#Determine the P&L distribution of the book of options, using the simulated underlying values. Assume
-#the implied volatility stays the same. Take interpolated rates for the term structure.
-
+# Calculate P&L Distribution using univariate model
 portfolio_value_inception <- sum(portfolio$Call_Price)
-# Calculate the option prices at the end of the 5 days for each scenario
-portfolio_value_five_days_ahead <- sapply(scenarios_asset, function(scenario_price) {
-  sum(
-    mapply(function(strike, maturity) {
-      f_black_scholes(
-        S = scenario_price,
-        K = strike,
-        T = (maturity - 5) / trading_days_in_year,
-        rf_structure = rf_structure,
-        sigma = last_volatility
-      ) %>% filter(Option_Type == "Call") %>% pull(Price)
-    }, portfolio$Strike_Price, portfolio$Maturity_days)
-  )
-})
 
-# Calculate the P&L distribution
-pnl_distribution <- portfolio_value_five_days_ahead - portfolio_value_inception
+pnl_results_univariate <- calculate_pnl_univariate(
+  scenarios_asset = scenarios_asset,
+  portfolio = portfolio,
+  rf_structure = rf_structure,
+  trading_days_in_year = trading_days_in_year,
+  last_volatility = last_volatility,
+  portfolio_value_inception = portfolio_value_inception
+)
 
-# Compute the VaR95 and ES95
-VaR95 <- quantile(pnl_distribution, 0.05)
-ES95  <- mean(pnl_distribution[pnl_distribution <= VaR95])
+pnl_distribution <- pnl_results_univariate$pnl_distribution
+VaR95 <- pnl_results_univariate$VaR95
+ES95 <- pnl_results_univariate$ES95
 
-# Plot the P&L distribution
-pnl_df <- data.frame(PnL = pnl_distribution)
-
-pnl_distrib_plot <- ggplot(pnl_df, aes(x = PnL)) +
-  geom_histogram(aes(y = after_stat(density)),
-                 binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
-  geom_density(color = "#E74C3C", linewidth = 0.8, adjust = 1) +
-  geom_vline(xintercept = VaR95, color = "cyan", linewidth = 0.9) +
-  geom_vline(xintercept = ES95,  color = "darkblue", linewidth = 0.9) +
-  annotate("text", x = VaR95, y = Inf, 
-           label = paste0("VaR 95%: $", round(VaR95, 2)),
-           color = "cyan", hjust = -0.1, vjust = 2, size = 3.5, fontface = "bold") +
-  annotate("text", x = ES95, y = Inf,  
-           label = paste0("ES 95%: $",  round(ES95, 2)),
-           color = "darkblue", hjust = -0.1, vjust = 4, size = 3.5, fontface = "bold") +
-  labs(title    = "P&L Distribution — Portfolio of European Call Options",
-       subtitle = paste0("10,000 scenarios | 5-day horizon | ",
-                         "VaR 95%: $", round(VaR95, 2), 
-                         " | ES 95%: $", round(ES95, 2)),
-       x = "P&L ($)", 
-       y = "Density",
-       caption = "Univariate Gaussian model — one risk driver | Red curve: KDE (Silverman bandwidth)") +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title    = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "#566573", size = 10),
-    plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
-    panel.grid.minor = element_blank()
-  )
-
-print(pnl_distrib_plot)
-
-#Save plot in the output folder
-ggsave(filename = here("Outputs", "pnl_distribution_plot_one_risk_driver.png"), 
-       plot = pnl_distrib_plot, width = 8, height = 5, dpi = 300) 
+# Plot and save
+pnl_distrib_plot <- plot_pnl_univariate(
+  pnl_distribution = pnl_distribution,
+  VaR95 = VaR95,
+  ES95 = ES95,
+  output_path = here("Outputs", "pnl_distribution_plot_one_risk_driver.png")
+) 
 
 
 ```
+
+
 
 
 ## Two risk drivers and bivariate Gaussian model

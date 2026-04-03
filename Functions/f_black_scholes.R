@@ -41,19 +41,26 @@ f_black_scholes <- function(S, K, T, rf_structure, sigma,
 }
 
 f_interpolate_rates <- function(rf_structure, T) {
-  ## Linear interpolation of risk-free rate from term structure
+  ## Linear interpolation of risk-free rate from term structure (handles scalar or vector T)
   ##
   ## Parameters:
   ##   rf_structure (data.frame): Term structure with columns y_maturity (years) and rate
-  ##   T (numeric): Maturity for interpolation (in years)
+  ##   T (numeric): Maturity for interpolation (scalar or vector, in years)
   ##
   ## Returns:
-  ##   numeric: Interpolated risk-free rate; extrapolates if T outside range
+  ##   numeric: Interpolated risk-free rate(s); extrapolates if T outside range
   ##
   ## Logic:
+  ##   - Vectorized: works with scalar T or vector of T values
   ##   - If T <= min maturity: returns minimum maturity rate
   ##   - If T >= max maturity: returns maximum maturity rate
   ##   - Otherwise: linear interpolation between surrounding maturities
+  
+  # Handle vector input
+  if (length(T) > 1) {
+    return(sapply(T, function(t) f_interpolate_rates(rf_structure, t)))
+  }
+  
   if (T <= min(rf_structure$y_maturity)) {
     return(rf_structure$rate[which.min(rf_structure$y_maturity)])
   } else if (T >= max(rf_structure$y_maturity)) {
@@ -77,4 +84,43 @@ f_interpolate_rates <- function(rf_structure, T) {
     
     return(r_interpolated)
   }
+}
+
+f_black_scholes_vectorized <- function(S, K, T, rf_structure, sigma,
+                                       trading_day_convention = 250,
+                                       rate_day_convention = 360) {
+  ## Vectorized Black-Scholes for single spot price, multiple strikes/maturities
+  ## Optimized for parallel Monte Carlo: returns call prices as vector
+  ##
+  ## Parameters:
+  ##   S (numeric): Single spot price
+  ##   K (numeric vector): Strike prices
+  ##   T (numeric vector): Times to maturity in years
+  ##   rf_structure (data.frame): Term structure
+  ##   sigma (numeric): Implied volatility (scalar or vector, length = length(K))
+  ##   trading_day_convention (numeric): Default 250
+  ##   rate_day_convention (numeric): Default 360
+  ##
+  ## Returns:
+  ##   numeric vector: Call prices (same length as K)
+
+  # Ensure vectors
+  K <- as.vector(K)
+  T <- as.vector(T)
+  sigma <- as.vector(sigma)
+  
+  # Vectorized time convention conversion
+  T_days <- T * trading_day_convention
+  T_rate <- T
+  
+  # Vectorized rate interpolation
+  r <- f_interpolate_rates(rf_structure, T_rate)
+  
+  # Vectorized Black-Scholes calculations
+  d1 <- (log(S / K) + (r + sigma^2 / 2) * T) / (sigma * sqrt(T))
+  d2 <- d1 - sigma * sqrt(T)
+  
+  price_call <- S * pnorm(d1) - K * exp(-r * T) * pnorm(d2)
+  
+  return(price_call)
 }
