@@ -142,9 +142,15 @@ f_calculate_forward_rates <- function(rf_structure, days_passed, trading_days_in
   t <- days_passed / trading_days_in_year
   r_t <- f_interpolate_rates(rf_structure, t)
   
-  forward_rates <- (rf_structure$rate * rf_structure$y_maturity - r_t * t) / 
-                   (rf_structure$y_maturity - t)
+  # Forward rates are only defined for maturities strictly greater than the horizon t.
+  idx <- rf_structure$y_maturity > t
+  rf_long <- rf_structure[idx, , drop = FALSE]
   
-  data.frame(y_maturity = rf_structure$y_maturity - t,
-             rate = forward_rates)
+  forward_rates <- (rf_long$rate * rf_long$y_maturity - r_t * t) /
+                   (rf_long$y_maturity - t)
+  
+  data.frame(
+    y_maturity = rf_long$y_maturity - t,
+    rate = forward_rates
+  )
 }

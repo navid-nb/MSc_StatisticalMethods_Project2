@@ -31,9 +31,9 @@ data_env <- new.env()
 source(here("Functions", "f_black_scholes.R"))
 source(here("Functions", "f_normal_scenarios.R"))
 source(here("Functions", "f_normal_scenarios_bivar.R"))
-source(here("Functions", "f_fit_vol_surface.R"))
 source(here("Functions", "f_pnl_univariate.R"))
 source(here("Functions", "f_pnl_bivariate.R"))
+source(here("Functions", "f_vol_surface_workflow.R"))
 
 file_path <- here("Data", "Raw", "Market.rda")
 stopifnot(file.exists(file_path))
@@ -411,81 +411,34 @@ The parametric surface is given by:
       
 where m = K/S is the moneyness and τ is the time to maturity of the option in years.
 ```{r Prepare data for volatility surface fitting, message=FALSE, warning=FALSE}
-# Combine calls and puts, calculate moneyness
-options_data <- bind_rows(
-  as.data.frame(calls) %>% mutate(Type = "Call"),
-  as.data.frame(puts)  %>% mutate(Type = "Put")
-) %>%
-  mutate(Moneyness = K / last_trading_price) %>%
-  dplyr::select(
-    Type,
-    Strike_Price= K,
-    Implied_Volatility = IV,
-    Moneyness,
-    Tau = tau
-  )
+# Use only OTM calls and OTM puts for surface calibration
+options_data <- prepare_options_data_otm(
+  calls = calls,
+  puts = puts,
+  spot_price = last_trading_price
+)
 ```
 
 ```{r}
-#Initialize the parameter vector for the optimization, we can start with some reasonable guesses based on the typical shape of volatility surfaces (e.g., a slight smile or skew).
-
-a1 <- coredata(last_volatility) # Starting point for the overall level of volatility
-
-#We do not have much prior to guess the curvature and asymmetry of the smile/skew, so we can start with small positive values for a2 and a3, which would correspond to a slight smile/skew. The term structure effect (a4) can also be initialized with a small positive value, as volatility often increases with time to maturity.
-
-a2 <- 0.1 
-a3 <- 0.1 
-a4 <- 0.1 
-
-alpha_init <- c(a1, a2, a3, a4)
-
-# Optimize the parameters of the volatility surface by minimizing the objective function
-optimization <- optim(
-  par    = alpha_init,
-  fn     = f_objective,
-  data   = options_data,
-  method = "Nelder-Mead"
+# Fit the parametric surface on OTM quotes
+fit_surface <- fit_vol_surface_otm(
+  options_data = options_data,
+  last_volatility = last_volatility
 )
 
-alpha_hat <- optimization$par
-
-names(alpha_hat) <- c("alpha1", "alpha2", "alpha3", "alpha4")
-
+alpha_hat <- fit_surface$alpha_hat
 print(alpha_hat)
 ```
 
 ```{r}
-#Visualize the fitted volatility surface by plotting slices of the surface at different maturities (τ) against moneyness (m). This will allow us to see how well the fitted surface captures the shape of the implied volatility across different strikes and maturities.
-moneyness_seq <- seq(0.7, 1.3, length.out = 200)
-tau_slices    <- c(0.08, 0.25, 0.50, 1.00, 2.00)
+# 3D visualization: fitted surface + market IV points (OTM)
+iv_surface_3d <- plot_vol_surface_3d(
+  options_data = options_data,
+  alpha_hat = alpha_hat,
+  output_path = here("Outputs", "iv_surface_3d.html")
+)
 
-slice_data <- expand.grid(Moneyness = moneyness_seq, Tau = tau_slices) %>%
-  mutate(
-    IV    = f_vol_surface(alpha_hat, Moneyness, Tau),
-    Tau_label = paste0("τ = ", Tau, " yr")
-  )
-
-ggplot(slice_data, aes(x = Moneyness, y = IV, color = factor(Tau_label))) +
-  geom_line(linewidth = 0.9) +
-  scale_color_brewer(palette = "RdYlBu", name = "Maturity") +
-  labs(
-    title    = "Fitted Volatility Surface — Moneyness Slices",
-    subtitle = paste0("α1=", round(alpha_hat[1],3), 
-                      " | α2=", round(alpha_hat[2],3),
-                      " | α3=", round(alpha_hat[3],3),
-                      " | α4=", round(alpha_hat[4],3)),
-    x = "Moneyness (K/S)",
-    y = "Implied Volatility"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title    = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "#566573", size = 10),
-    panel.grid.minor = element_blank()
-  )
-#Save plot in the output folder
-ggsave(filename = here("Outputs", "fitted_vol_surface_slices.png"),
-       plot = last_plot(), width = 8, height = 5, dpi = 300) ###needs fix
+iv_surface_3d
 ```
 
 Re-price the portfolio using the parametric model. Once you have fitted the volatility surface, consider
@@ -494,141 +447,62 @@ time T . For the pricing at T + 5, consider ˜σ(m, τ ) = σ(m, τ ) − (α1 +
 obtained by simulation.
 
 ```{r}
-# Re-price the portfolio using the fitted volatility surface
-portfolio <- portfolio %>% mutate(Moneyness = Strike_Price / last_trading_price)
-portfolio <- portfolio %>% mutate(Tau = Maturity_days / trading_days_in_year)
-
-portfolio_scenarios <- map_dfr(seq_along(scenarios_vix), function(s) {
-  portfolio %>%
-    rowwise() %>%
-    mutate(
-      Fitted_IV = f_vol_surface(alpha_hat, Moneyness, Tau),
-      Adjusted_IV_T = Fitted_IV - (alpha_hat[1] + alpha_hat[4]) + last_volatility,
-      Adjusted_IV_T_plus_5 = Fitted_IV - (alpha_hat[1] + alpha_hat[4]) + scenarios_vix[s],
-      Scenario = s
-    ) %>%
-    ungroup()
-})
-```
-
-```{r}
-#Calculate the option prices at time T and T+5 using the adjusted implied volatilities from the fitted surface
-portfolio_scenarios <- portfolio_scenarios %>%
-  rowwise() %>%
-  mutate(
-    Price_T = f_black_scholes(
-      S = last_trading_price,
-      K = Strike_Price,
-      T = Maturity_days / trading_days_in_year,
-      rf_structure = rf_structure,
-      sigma = Adjusted_IV_T
-    ) %>% filter(Option_Type == "Call") %>% pull(Price),
-    Price_T_plus_5 = f_black_scholes(
-      S = last_trading_price,
-      K = Strike_Price,
-      T = (Maturity_days - 5) / trading_days_in_year,
-      rf_structure = rf_structure,
-      sigma = Adjusted_IV_T_plus_5
-    ) %>% filter(Option_Type == "Call") %>% pull(Price)
-  ) %>%
-  ungroup()
-```
-
-
-```{r}
-portfolio_value_surface <- portfolio_scenarios %>%
-  group_by(Scenario) %>%
-  summarise(
-    Value_T        = sum(Price_T),
-    Value_T_plus_5 = sum(Price_T_plus_5),
-    .groups = "drop"
-  )
-
-pnl_distribution_surface <- portfolio_value_surface$Value_T_plus_5 - portfolio_value_inception
-
-VaR95_surface <- quantile(pnl_distribution_surface, 0.05)
-ES95_surface  <- mean(pnl_distribution_surface[pnl_distribution_surface <= VaR95_surface])
-```
-
-```{r}
-# Overlay: one-driver vs two-drivers (comparable distributions — both simulate spot)
-pnl_combined_two <- data.frame(
-  PnL   = c(pnl_distribution, pnl_distribution_biv),
-  Model = rep(c("One driver", "Two drivers"), each = number_of_scenarios)
+# Re-price the portfolio using the fitted parametric surface sigma_hat(m, tau) (no VIX adjustment yet)
+surface_prices_sigma_hat_T <- portfolio_surface_prices_sigma_hat(
+  portfolio = portfolio,
+  alpha_hat = alpha_hat,
+  spot_price = last_trading_price,
+  rf_structure = rf_structure,
+  trading_days_in_year = trading_days_in_year,
+  horizon_days = 0
 )
 
-model_colors_two <- c("One driver"  = "#8E44AD",
-                      "Two drivers" = "#E74C3C")
+surface_prices_sigma_hat_T$portfolio_value
+```
 
-pnl_overlay_plot <- ggplot(pnl_combined_two, aes(x = PnL, color = Model)) +
-  geom_density(linewidth = 0.9, adjust = 1) +
-  geom_vline(xintercept = VaR95,     color = "#8E44AD", linewidth = 0.7, linetype = "dashed") +
-  geom_vline(xintercept = VaR95_biv, color = "#E74C3C", linewidth = 0.7, linetype = "dashed") +
-  scale_color_manual(values = model_colors_two, name = "Model") +
-  labs(
-    title    = "P&L Distribution — One vs Two Risk Drivers",
-    subtitle = paste0(
-      "One driver — VaR: $",  round(VaR95, 2),     " | ES: $", round(ES95, 2),     "  //  ",
-      "Two drivers — VaR: $", round(VaR95_biv, 2), " | ES: $", round(ES95_biv, 2)
-    ),
-    x       = "P&L ($)",
-    y       = "Density",
-    caption = "10,000 scenarios | 5-day horizon | KDE curves (Silverman bandwidth) | Dashed verticals: VaR 95%"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title    = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "#566573", size = 9),
-    plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
-    panel.grid.minor = element_blank(),
-    legend.position  = "top"
-  )
 
-print(pnl_overlay_plot)
+```{r}
+# Build adjusted volatility at time T for the portfolio (sigma to plug into BMS)
+surface_inputs_T <- portfolio_surface_inputs(
+  portfolio = portfolio,
+  alpha_hat = alpha_hat,
+  spot_price = last_trading_price,
+  vix_level = last_volatility,
+  trading_days_in_year = trading_days_in_year,
+  horizon_days = 0
+)
 
-ggsave(filename = here("Outputs", "pnl_overlay_one_vs_two_drivers.png"),
-       plot = pnl_overlay_plot, width = 9, height = 5, dpi = 300)
+surface_inputs_T
 ```
 
 ```{r}
-# Standalone: vol surface model — vol risk only, spot held fixed
-pnl_df_surface <- data.frame(PnL = pnl_distribution_surface)
+# Vol surface P&L using bivariate Gaussian scenarios (spot + VIX)
+pnl_surface_biv <- calculate_pnl_vol_surface(
+  portfolio = portfolio,
+  alpha_hat = alpha_hat,
+  spot_T = last_trading_price,
+  vix_T = last_volatility,
+  rf_structure_T = rf_structure,
+  rf_structure_T_plus_h = rf_structure_forward,
+  trading_days_in_year = trading_days_in_year,
+  horizon_days = days_ahead,
+  spot_scenarios_T_plus_h = scenarios_asset_biv,
+  vix_scenarios_T_plus_h = scenarios_vix
+)
 
-pnl_surface_plot <- ggplot(pnl_df_surface, aes(x = PnL)) +
-  geom_histogram(aes(y = after_stat(density)),
-                 binwidth = 0.5, fill = "#27AE60", color = "#AEB6BF", alpha = 0.85) +
-  geom_density(color = "#E74C3C", linewidth = 0.8, adjust = 1) +
-  geom_vline(xintercept = VaR95_surface, color = "cyan",     linewidth = 0.9) +
-  geom_vline(xintercept = ES95_surface,  color = "darkblue", linewidth = 0.9) +
-  annotate("text", x = VaR95_surface, y = Inf,
-           label = paste0("VaR 95%: $", round(VaR95_surface, 2)),
-           color = "cyan", hjust = -0.1, vjust = 2, size = 3.5, fontface = "bold") +
-  annotate("text", x = ES95_surface, y = Inf,
-           label = paste0("ES 95%: $",  round(ES95_surface, 2)),
-           color = "darkblue", hjust = -0.1, vjust = 4, size = 3.5, fontface = "bold") +
-  labs(
-    title    = "P&L Distribution — Volatility Surface Model",
-    subtitle = paste0("10,000 scenarios | 5-day horizon | ",
-                      "VaR 95%: $", round(VaR95_surface, 2),
-                      " | ES 95%: $", round(ES95_surface, 2)),
-    x       = "P&L ($)",
-    y       = "Density",
-    caption = "Vol surface model — vol risk only, spot held fixed | Red curve: KDE (Silverman bandwidth)"
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title    = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "#566573", size = 10),
-    plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
-    panel.grid.minor = element_blank()
-  )
+pnl_distribution_surface_biv <- pnl_surface_biv$pnl_distribution
+VaR95_surface_biv <- pnl_surface_biv$VaR95
+ES95_surface_biv  <- pnl_surface_biv$ES95
 
-print(pnl_surface_plot)
-
-ggsave(filename = here("Outputs", "pnl_distribution_vol_surface.png"),
-       plot = pnl_surface_plot, width = 8, height = 5, dpi = 300)
+plot_pnl_vol_surface(
+  pnl_distribution = pnl_distribution_surface_biv,
+  VaR95 = VaR95_surface_biv,
+  ES95 = ES95_surface_biv,
+  horizon_days = days_ahead,
+  caption = "Vol surface model — VIX from bivariate Gaussian (spot + VIX jointly simulated)",
+  output_path = here("Outputs", "pnl_distribution_vol_surface_bivariate.png")
+)
 ```
-
 
 ===========================Annexe=================================
 
