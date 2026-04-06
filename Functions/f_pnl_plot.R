@@ -159,3 +159,9 @@ plot_pnl_bivariate <- function(pnl_distribution, VaR95, ES95, output_path = NULL
            model_label = "Bivariate Gaussian model — two risk drivers",
            output_path = output_path)
 }
+
+plot_pnl_copula <- function(pnl_distribution, VaR95, ES95, output_path = NULL) {
+  plot_pnl(pnl_distribution, VaR95, ES95,
+           model_label = "Copula-Marginal model — Student-t marginals with Gaussian copula",
+           output_path = output_path)
+}
