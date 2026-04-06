@@ -32,17 +32,26 @@ library(tidyr)
 library(PerformanceAnalytics)
 library(cvar)
 library(MASS)
+library(here)
 ```
 
 ## Data Import
 ```{r}
+TP2_env <- new.env()
 source('TP2_func_stats.R') #BS_call, vol_surface, min_dist_vol_surf
-load('Market.rda')
-sp500 <- Market$sp500
-vix <- Market$vix
-int_rates <- Market$rf
-calls <- Market$calls
-puts <- Market$puts
+
+file_path <- here("Data", "Raw", "Market.rda")
+
+load(file_path, envir = TP2_env)
+ls(TP2_env)
+
+data <- TP2_env$Market
+
+sp500 <- data$sp500
+vix <- data$vix
+int_rates <- data$rf
+calls <- data$calls
+puts <- data$puts
 ```
 
 ## Pricing of a portfolio of options
