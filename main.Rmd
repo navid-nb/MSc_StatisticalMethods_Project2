@@ -153,6 +153,14 @@ cum_log_returns <- rnorm(number_of_scenarios,
 
 # Convert to prices
 scenarios_asset <- last_trading_price * exp(cum_log_returns)
+
+# Calculate forward rates for accurate pricing at T+5
+rf_structure_forward <- f_calculate_forward_rates(rf_structure, days_ahead, trading_days_in_year)
+
+knitr::kable(data.frame(
+  Parameter = c("Mean (daily)", "Std Dev (daily)"),
+  Estimate = c(round(mu_daily_log_returns_asset, 6), round(sigma_daily_log_returns_asset, 6))
+), caption = "MLE Estimates for Daily Log-Returns of the Underlying Asset:")
 ```
 
 
@@ -161,7 +169,6 @@ To complement the frequency histograms below, we overlay a kernel density estima
 
 ```{r}
 
-rf_structure_forward <- f_calculate_forward_rates(rf_structure, days_ahead, trading_days_in_year)
 
 # Calculate P&L Distribution using univariate model
 portfolio_value_inception <- sum(portfolio$Call_Price)
@@ -217,6 +224,19 @@ scenarios_mnorm <- mvtnorm::rmvnorm(n = number_of_scenarios, mean = mu_mnorm * d
 # Convert to prices
 scenarios_asset_biv <- last_trading_price * exp(scenarios_mnorm[, 1])
 scenarios_vix <- last_volatility * exp(scenarios_mnorm[, 2])
+
+#kable parametersestimated
+knitr::kable(data.frame(
+  Parameter = c("Asset Mean (daily)", "Asset Std Dev (daily)", "VIX Mean (daily)", "VIX Std Dev (daily)", "Covariance", "Correlation"),
+  Estimate = c(
+    round(mu_mnorm[1], 6), 
+    round(sqrt(cov_mle[1, 1]), 6), 
+    round(mu_mnorm[2], 6), 
+    round(sqrt(cov_mle[2, 2]), 6), 
+    round(cov_mle[1, 2], 6), 
+    round(cov_mle[1, 2] / (sqrt(cov_mle[1, 1]) * sqrt(cov_mle[2, 2])), 6)
+  )
+), caption = "MLE Estimates for Bivariate Gaussian Model:")
 ```
 
 ```{r}
