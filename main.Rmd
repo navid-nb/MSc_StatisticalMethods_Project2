@@ -38,7 +38,7 @@ library(here)
 ## Data Import
 ```{r}
 TP2_env <- new.env()
-source('TP2_func_stats.R') #BS_call, vol_surface, min_dist_vol_surf
+source(here("Functions", 'TP2_func_stats.R') #BS_call, vol_surface, min_dist_vol_surf
 
 file_path <- here("Data", "Raw", "Market.rda")
 
