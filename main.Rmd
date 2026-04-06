@@ -1,17 +1,21 @@
-# ---
+---
 title: "TP2 - MATH60633A.H2026 - Statistical Methods for Financial Data "
-author: "Francis Mazzone () & Vaast Émilien (11364986)"
+author: 
+
+  - "Navid Namazi Baigi"
+  - "Venkat Narayana Ramakrishnan"
+  
 date: "`r Sys.Date()`"
-output: pdf_document
+output: 
+  html_document:
+    code_folding: "show"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+set.seed(123)
 ```
 
-## Introduction
-
-This document presents the analysis of the data collected for our project. We will explore the data, perform statistical tests, and visualize the results to draw meaningful conclusions.
 
 ```{r libraries, message=FALSE, echo= TRUE}
 # Load necessary libraries
@@ -24,22 +28,20 @@ library(purrr)
 library(ggplot2)
 library(MASS)
 library(plotly)
+library(mvtnorm)
 ```
 
 ```{r environment set up, message=FALSE, warning=FALSE}
 data_env <- new.env()
 source(here("Functions", "f_black_scholes.R"))
-source(here("Functions", "f_normal_scenarios.R"))
-source(here("Functions", "f_normal_scenarios_bivar.R"))
-source(here("Functions", "f_pnl_univariate.R"))
-source(here("Functions", "f_pnl_bivariate.R"))
+source(here("Functions", "f_pnl_plot.R"))
 source(here("Functions", "f_vol_surface_workflow.R"))
 
 file_path <- here("Data", "Raw", "Market.rda")
 stopifnot(file.exists(file_path))
 
 load(file_path, envir = data_env)
-ls(data_env)
+# ls(data_env)
 
 data <- data_env$Market
 
@@ -56,17 +58,11 @@ puts <- data$puts
 
 # check class of all 
 data_classes <- sapply(data, class)
-print(data_classes)
+knitr::kable(data_classes)
 
 ```
 
 ## Pricing of a portfolio of options
-
-```{r define conventions, message=FALSE, warning=FALSE}
-# Define conventions
-days_in_year <- 360
-trading_days_in_year <- 250
-```
 
 We want to build a portfolio that consists of 4 European call options:
 
@@ -76,6 +72,10 @@ We want to build a portfolio that consists of 4 European call options:
 -   Strike price: 1800 \| Maturity: 40 days
 
 ```{r Build the portfolio, message=FALSE, warning=FALSE}
+# Define conventions
+days_in_year <- 360
+trading_days_in_year <- 250
+
 #Underlying asset price and volatility for the options in the portfolio
 last_trading_price <- coredata(tail(sp500, 1))
 last_volatility <- coredata(tail(vix, 1))
@@ -110,37 +110,51 @@ portfolio <- portfolio %>%
   ) %>%
   ungroup() 
 
-portfolio
+knitr::kable(portfolio)
 ```
 
 ## One risk driver and uni-variate Gaussian Model
+
+### Methodology: MLE Estimation and Time Scaling (same logic used for the bivariate model)
+
+**Parameter Estimation:** Using closed-form maximum likelihood estimators:
+
+- **Mean**: $\hat{\mu} = \frac{1}{n}\sum_{i=1}^{n} R_i$ (=sample mean)
+
+- **Variance (MLE)**: $\hat{\sigma}^2 = \frac{1}{n}\sum_{i=1}^{n} (R_i - \hat{\mu})^2$ ( = sample variance $\times \frac{n-1}{n}$)
+
+
+**Time-Scaling for Horizon T:** For independent daily returns, the cumulative T-day log-return follows:
+$$\sum_{t=1}^{T} R_t \sim N(T \cdot \mu, T \cdot \sigma^2)$$
+
+Therefore, we generate scenarios from $N(T \cdot \hat{\mu}, T \cdot \hat{\sigma})$ and convert to terminal prices via $S_T = S_0 \cdot e^{\text{cum_log_return}}$.
+
 ```{r}
 #Computing the log-returns
 daily_log_returns <- diff(log(sp500))[-1]
  
-#Calculate the mean and standard deviation of the daily log-returns
-#They serve as estimators for the parameters of the uni-variate Gaussian model
+#Calculate MLE estimates of mean and standard deviation of the daily log-returns
 mu_daily_log_returns_asset <- mean(daily_log_returns)
 n_asset <- length(daily_log_returns)
 sigma_daily_log_returns_asset <- sd(daily_log_returns) * sqrt((n_asset - 1) / n_asset)  # MLE adjustment
 
-# Generate 10,000 scenarios for the underlying asset price in 5 days using the uni-variate Gaussian model
+# Generate 10,000 scenarios for the underlying asset price in 5 days
 days_ahead <- 5
 number_of_scenarios <- 10000
 
-scenarios_asset <- f_normal_scenarios(
-  mu_returns = mu_daily_log_returns_asset,
-  sigma_returns = sigma_daily_log_returns_asset,
-  n_scenarios = number_of_scenarios,
-  T = days_ahead,
-  spot_price = last_trading_price
-)
+# Generate T-day cumulative log-returns from N(T*mu, T*sigma^2)
+cum_log_returns <- rnorm(number_of_scenarios, 
+                         mean = mu_daily_log_returns_asset * days_ahead,
+                         sd = sigma_daily_log_returns_asset * sqrt(days_ahead))
+
+# Convert to prices
+scenarios_asset <- last_trading_price * exp(cum_log_returns)
 ```
 
 
 To complement the frequency histograms below, we overlay a kernel density estimate (KDE) on each P&L distribution. The KDE is computed with Silverman's rule-of-thumb bandwidth and places a smooth kernel (Gaussian by default in `geom_density`) at each observation, then sums the contributions. The resulting curve gives a continuous reading of the distribution shape and makes it easier to compare across models. The main caveat is that smoothing is indifferent to the underlying data structure: a wide bandwidth will wash out genuine secondary modes or sharp asymmetries that the raw histogram would reveal. We therefore keep the histogram as the primary visual and treat the density curve as a reading aid, not a replacement.
 
-At t=5, the original interest rates quoted at t=0 are converted to forward rates for accurate option revaluation. We derive the forward curve from the original term structure, which accounts for the time passage and ensures correct discounting of future cash flows.
+**Note:** At t=5, the original interest rates quoted at t=0 are converted to forward rates for accurate option revaluation. We derive the forward curve from the original term structure, which accounts for the time passage and ensures correct discounting of future cash flows.
 
 
 ```{r}
@@ -179,28 +193,28 @@ pnl_distrib_plot <- plot_pnl_univariate(
 
 ## Two risk drivers and bivariate Gaussian model
 ```{r}
-#Compute the log-returns for the volatility index
+
+# Compute log-returns for the volatility index
 daily_log_returns_vix <- diff(log(vix))[-1]
 
-#Calculate the mean and standard deviation of the daily log-returns for the volatility index
-mu_daily_log_returns_vix <- mean(daily_log_returns_vix)
-sigma_daily_log_returns_vix <- sd(daily_log_returns_vix)
+# Estimate parameters from bivariate returns
+combined_returns <- cbind(daily_log_returns, daily_log_returns_vix)
+n_obs <- nrow(combined_returns)
+mu_mvtnorm <- colMeans(combined_returns)
 
-# Proper bivariate Gaussian model: simulate (S, VIX) jointly with correlation
-rho_gaussian <- cor(as.numeric(daily_log_returns), as.numeric(daily_log_returns_vix))
-scenarios_biv <- f_normal_scenarios_bivar(
-  mu_returns    = c(mu_daily_log_returns_asset, mu_daily_log_returns_vix),
-  sigma_returns = c(sigma_daily_log_returns_asset, sigma_daily_log_returns_vix),
-  corr_matrix   = matrix(c(1, rho_gaussian, rho_gaussian, 1), nrow = 2, byrow = TRUE),
-  n_scenarios   = number_of_scenarios,
-  T            = days_ahead,
-  spot_price   = c(last_trading_price, last_volatility)
-)
+# MLE estimate of covariance (divide by n instead of n-1)
+cov_mle <- cov(combined_returns) * (n_obs - 1) / n_obs
 
-scenarios_asset_biv <- scenarios_biv[, 1]
-scenarios_vix       <- scenarios_biv[, 2]
+# Scale to T-day horizon: mu_T = T*mu_daily, Sigma_T = T*Sigma_daily
+sigma_mvtnorm <- cov_mle * days_ahead
+mu_mvtnorm_scaled <- mu_mvtnorm * days_ahead
 
+# Generate scenarios using mvtnorm::rmvnorm
+scenarios_mvtnorm <- mvtnorm::rmvnorm(n = number_of_scenarios, mean = mu_mvtnorm_scaled, sigma = sigma_mvtnorm)
 
+# Convert to prices
+scenarios_asset_biv <- last_trading_price * exp(scenarios_mvtnorm[, 1])
+scenarios_vix <- last_volatility * exp(scenarios_mvtnorm[, 2])
 ```
 
 ```{r}
@@ -227,347 +241,337 @@ pnl_distrib_plot <- plot_pnl_bivariate(
 )
 ```
 
-```{r}
-#Sanity check, both PnL distribution are similar but not identical
-#Here is the overlaid visualization of the two P&L distributions. For a long call portfolio, you’re delta-positive (hurt when S&P drops) and vega-positive (helped when implied vol/VIX rises). Our fitted dependence is the usual negative correlation between S&P returns and VIX returns, then in bad equity scenarios (SP500 down), we tend to also get VIX up (additionally the VIX would shoot up when SP500 drops due to the leverage effect). This partially offsets losses, so the two-driver VaR/ES is less negative than the univariate “vol fixed” model. 
-pnl_combined <- data.frame(
-  PnL   = c(pnl_distribution, pnl_distribution_biv),
-  Model = rep(c("One driver", "Two drivers"), each = 10000)
-)
+## Comparison of Univariate vs Bivariate Models: Impact of Volatility Correlation
 
-overlaid_dist <- ggplot(pnl_combined, aes(x = PnL, fill = Model)) +
-  geom_histogram(binwidth = 1, alpha = 0.5, position = "identity") +
-  scale_fill_manual(values = c("One driver" = "#2C3E50", "Two drivers" = "#E74C3C")) +
-  theme_minimal()
+The bivariate model captures a key market dynamic: the negative correlation between equity returns and implied volatility. This creates a natural hedging benefit for long call portfolios:
 
-print(overlaid_dist)
+- **Delta Effect**: Long calls are delta-positive → losses occur when S&P 500 declines
+- **Vega Effect**: Long calls are vega-positive → gains occur when volatility increases
+- **Market Structure**: During equity downturns, volatility (VIX) typically spikes (sp500 returns are negatively correlated with vix returns) 
+- **Result**: When adverse equity scenarios occur (S&P down), the simultaneous VIX increase partially offsets the losses through vega gains
 
-#Save plot in the output folder
-ggsave(filename = here("Outputs", "Overlaid_PnL_Distributions.png"), 
-       plot = overlaid_dist, width = 8, height = 5, dpi = 300) 
-```
+This natural hedging mechanism causes the bivariate model's risk metrics (VaR, ES) to be less negative (higher value) compared to the univariate model, where volatility is held artificially constant.
 
 
+<!-- ##Two risk drivers and copula-marginal model (Student-t and Gaussian copula) -->
+<!-- ```{r} -->
+<!-- # Estimate the correlation between the asset's return and the VIX return and the parameters of the marginal distributions (Student-t in this case) for both the asset and the VIX. -->
+<!-- correlation <- cor(daily_log_returns, daily_log_returns_vix) -->
+<!-- Corr_matrix <- matrix(data=c(1, correlation, correlation, 1), nrow=2, ncol=2, byrow=TRUE) -->
+<!-- sig <- c(1, 1) -->
+<!-- Sigma <- diag(sig) %*% Corr_matrix %*% diag(sig) -->
 
-##Two risk drivers and copula-marginal model (Student-t and Gaussian copula)
-```{r}
-# Estimate the correlation between the asset's return and the VIX return and the parameters of the marginal distributions (Student-t in this case) for both the asset and the VIX.
-correlation <- cor(daily_log_returns, daily_log_returns_vix)
-Corr_matrix <- matrix(data=c(1, correlation, correlation, 1), nrow=2, ncol=2, byrow=TRUE)
-sig <- c(1, 1) 
-Sigma <- diag(sig) %*% Corr_matrix %*% diag(sig) 
+<!-- degrees_freedom_asset <- 10 -->
+<!-- degrees_freedom_vix <- 5 -->
 
-degrees_freedom_asset <- 10 
-degrees_freedom_vix <- 5
+<!-- degrees_freedom_vector <- c(degrees_freedom_asset, degrees_freedom_vix) -->
 
-degrees_freedom_vector <- c(degrees_freedom_asset, degrees_freedom_vix)
+<!-- #Generate standard bivariate normal draws - 10 000 pairs from a bivariate normal distribution with the estimated correlation -->
+<!-- bvn_samples <- mvrnorm(n = number_of_scenarios, mu = c(0,0), Sigma = Sigma) -->
 
-#Generate standard bivariate normal draws - 10 000 pairs from a bivariate normal distribution with the estimated correlation
-bvn_samples <- mvrnorm(n = number_of_scenarios, mu = c(0,0), Sigma = Sigma)
+<!-- #Transform to uniform space via pnorm -->
+<!-- uniform_samples <- pnorm(bvn_samples) -->
 
-#Transform to uniform space via pnorm
-uniform_samples <- pnorm(bvn_samples)
+<!-- #Sanity check - visualize the bivariate normal samples and the corresponding uniform samples to confirm that the transformation is working as expected -->
+<!-- par(mfrow = c(1, 2)) -->
+<!-- plot(bvn_samples, pch = 19, col = "blue", main = "Bivariate Normal Distribution") -->
+<!-- plot(uniform_samples, pch = 19, col = "red", main = "Correlated Uniform Samples") -->
+<!-- par(mfrow = c(1, 1)) -->
 
-#Sanity check - visualize the bivariate normal samples and the corresponding uniform samples to confirm that the transformation is working as expected
-par(mfrow = c(1, 2))
-plot(bvn_samples, pch = 19, col = "blue", main = "Bivariate Normal Distribution")
-plot(uniform_samples, pch = 19, col = "red", main = "Correlated Uniform Samples")
-par(mfrow = c(1, 1))
+<!-- #Transform to Student-t space via qt -->
+<!-- student_draws <- data.frame( -->
+<!--   Asset = qt(uniform_samples[, 1], df = 10), -->
+<!--   VIX   = qt(uniform_samples[, 2], df = 5) -->
+<!-- ) -->
 
-#Transform to Student-t space via qt
-student_draws <- data.frame(
-  Asset = qt(uniform_samples[, 1], df = 10),
-  VIX   = qt(uniform_samples[, 2], df = 5)
-)
-
-#Scale to real returns
-corr_draws <- data.frame(
-  Asset = student_draws$Asset / sqrt(10/8) * sigma_daily_log_returns_asset + mu_daily_log_returns_asset,
-  VIX   = student_draws$VIX   / sqrt(5/3)  * sigma_daily_log_returns_vix   + mu_daily_log_returns_vix
-)
-```
+<!-- #Scale to real returns -->
+<!-- corr_draws <- data.frame( -->
+<!--   Asset = student_draws$Asset / sqrt(10/8) * sigma_daily_log_returns_asset + mu_daily_log_returns_asset, -->
+<!--   VIX   = student_draws$VIX   / sqrt(5/3)  * sigma_daily_log_returns_vix   + mu_daily_log_returns_vix -->
+<!-- ) -->
+<!-- ``` -->
 
 
 
-```{r}
-copula_plot <- ggplot() + theme_void()  
+<!-- ```{r} -->
+<!-- copula_plot <- ggplot() + theme_void() -->
 
-p1 <- ggplot(student_draws, aes(x = Asset, y = VIX)) +
-  geom_point(color = rgb(0, 0, 1, 0.3), size = 0.4) +
-  labs(title = "Student-t Draws (standardized)",
-       x = "Asset (t, df=10)", y = "VIX (t, df=5)") +
-  theme_minimal(base_size = 11) +
-  theme(plot.title = element_text(face = "bold", size = 10))
+<!-- p1 <- ggplot(student_draws, aes(x = Asset, y = VIX)) + -->
+<!--   geom_point(color = rgb(0, 0, 1, 0.3), size = 0.4) + -->
+<!--   labs(title = "Student-t Draws (standardized)", -->
+<!--        x = "Asset (t, df=10)", y = "VIX (t, df=5)") + -->
+<!--   theme_minimal(base_size = 11) + -->
+<!--   theme(plot.title = element_text(face = "bold", size = 10)) -->
 
-p2 <- ggplot(student_draws, aes(x = Asset)) +
-  geom_histogram(bins = 60, fill = "#2C3E50", color = NA) +
-  labs(title = "Asset margin (t, df=10)", x = "", y = "Frequency") +
-  theme_minimal(base_size = 11) +
-  theme(plot.title = element_text(face = "bold", size = 10))
+<!-- p2 <- ggplot(student_draws, aes(x = Asset)) + -->
+<!--   geom_histogram(bins = 60, fill = "#2C3E50", color = NA) + -->
+<!--   labs(title = "Asset margin (t, df=10)", x = "", y = "Frequency") + -->
+<!--   theme_minimal(base_size = 11) + -->
+<!--   theme(plot.title = element_text(face = "bold", size = 10)) -->
 
-p3 <- ggplot(student_draws, aes(x = VIX)) +
-  geom_histogram(bins = 60, fill = "#E74C3C", color = NA) +
-  labs(title = "VIX margin (t, df=5)", x = "", y = "Frequency") +
-  theme_minimal(base_size = 11) +
-  theme(plot.title = element_text(face = "bold", size = 10))
+<!-- p3 <- ggplot(student_draws, aes(x = VIX)) + -->
+<!--   geom_histogram(bins = 60, fill = "#E74C3C", color = NA) + -->
+<!--   labs(title = "VIX margin (t, df=5)", x = "", y = "Frequency") + -->
+<!--   theme_minimal(base_size = 11) + -->
+<!--   theme(plot.title = element_text(face = "bold", size = 10)) -->
 
-p4 <- ggplot(corr_draws, aes(x = Asset, y = VIX)) +
-  geom_point(color = rgb(0, 0.5, 0, 0.3), size = 0.4) +
-  labs(title = "Scaled Draws (real return units)",
-       x = "Asset return", y = "VIX return") +
-  theme_minimal(base_size = 11) +
-  theme(plot.title = element_text(face = "bold", size = 10))
+<!-- p4 <- ggplot(corr_draws, aes(x = Asset, y = VIX)) + -->
+<!--   geom_point(color = rgb(0, 0.5, 0, 0.3), size = 0.4) + -->
+<!--   labs(title = "Scaled Draws (real return units)", -->
+<!--        x = "Asset return", y = "VIX return") + -->
+<!--   theme_minimal(base_size = 11) + -->
+<!--   theme(plot.title = element_text(face = "bold", size = 10)) -->
 
-copula_plot <- (p2 + p3) / (p1 + p4) +
-  plot_annotation(
-    title    = "Gaussian Copula with Student-t Marginals",
-    subtitle = "Asset: t(df=10) | VIX: t(df=5) | Normal copula dependence",
-    caption  = "Top: marginal distributions | Bottom: joint dependence structure",
-    theme = theme(
-      plot.title    = element_text(face = "bold", size = 14),
-      plot.subtitle = element_text(color = "#566573", size = 10),
-      plot.caption  = element_text(color = "#566573", size = 9, hjust = 0)
-    )
-  )
+<!-- copula_plot <- (p2 + p3) / (p1 + p4) + -->
+<!--   plot_annotation( -->
+<!--     title    = "Gaussian Copula with Student-t Marginals", -->
+<!--     subtitle = "Asset: t(df=10) | VIX: t(df=5) | Normal copula dependence", -->
+<!--     caption  = "Top: marginal distributions | Bottom: joint dependence structure", -->
+<!--     theme = theme( -->
+<!--       plot.title    = element_text(face = "bold", size = 14), -->
+<!--       plot.subtitle = element_text(color = "#566573", size = 10), -->
+<!--       plot.caption  = element_text(color = "#566573", size = 9, hjust = 0) -->
+<!--     ) -->
+<!--   ) -->
 
-print(copula_plot)
+<!-- print(copula_plot) -->
 
-ggsave(filename = here("Outputs", "copula_plot.png"), 
-       plot = copula_plot , width = 8, height = 5, dpi = 300) 
-```
+<!-- ggsave(filename = here("Outputs", "copula_plot.png"), -->
+<!--        plot = copula_plot , width = 8, height = 5, dpi = 300) -->
+<!-- ``` -->
 
-```{r}
+<!-- ```{r} -->
 
-scenarios_asset_cop <- last_trading_price * exp(corr_draws$Asset)
-scenarios_vix_cop   <- last_volatility * exp(corr_draws$VIX)
+<!-- scenarios_asset_cop <- last_trading_price * exp(corr_draws$Asset) -->
+<!-- scenarios_vix_cop   <- last_volatility * exp(corr_draws$VIX) -->
 
-#Calculate the option prices at the end of the 5 days for each scenario including vix scenarios from the copula-marginal model
-portfolio_value_five_days_ahead_copula <- mapply(function(scenarios_asset_cop, scenario_vix_cop) {
-  sum(
-    mapply(function(strike, maturity) {
-      f_black_scholes(
-        S = scenarios_asset_cop,
-        K = strike,
-        T = (maturity - 5) / trading_days_in_year,
-        rf_structure = rf_structure,
-        sigma = scenario_vix_cop        
-      ) %>% filter(Option_Type == "Call") %>% pull(Price)
-    }, portfolio$Strike_Price, portfolio$Maturity_days)
-  )
-}, scenarios_asset_cop, scenarios_vix_cop)
+<!-- #Calculate the option prices at the end of the 5 days for each scenario including vix scenarios from the copula-marginal model -->
+<!-- portfolio_value_five_days_ahead_copula <- mapply(function(scenarios_asset_cop, scenario_vix_cop) { -->
+<!--   sum( -->
+<!--     mapply(function(strike, maturity) { -->
+<!--       f_black_scholes( -->
+<!--         S = scenarios_asset_cop, -->
+<!--         K = strike, -->
+<!--         T = (maturity - 5) / trading_days_in_year, -->
+<!--         rf_structure = rf_structure, -->
+<!--         sigma = scenario_vix_cop -->
+<!--       ) %>% filter(Option_Type == "Call") %>% pull(Price) -->
+<!--     }, portfolio$Strike_Price, portfolio$Maturity_days) -->
+<!--   ) -->
+<!-- }, scenarios_asset_cop, scenarios_vix_cop) -->
 
-# Calculate the P&L distribution
-pnl_distribution_copula <- portfolio_value_five_days_ahead_copula - portfolio_value_inception
+<!-- # Calculate the P&L distribution -->
+<!-- pnl_distribution_copula <- portfolio_value_five_days_ahead_copula - portfolio_value_inception -->
 
-# Compute the VaR95 and ES95
-VaR95_copula <- quantile(pnl_distribution_copula, 0.05)
-ES95_copula  <- mean(pnl_distribution_copula[pnl_distribution_copula <= VaR95_copula])
+<!-- # Compute the VaR95 and ES95 -->
+<!-- VaR95_copula <- quantile(pnl_distribution_copula, 0.05) -->
+<!-- ES95_copula  <- mean(pnl_distribution_copula[pnl_distribution_copula <= VaR95_copula]) -->
 
-# Plot the P&L distribution
-pnl_df_copula <- data.frame(PnL = pnl_distribution_copula)
+<!-- # Plot the P&L distribution -->
+<!-- pnl_df_copula <- data.frame(PnL = pnl_distribution_copula) -->
 
-pnl_distrib_plot_copula <- ggplot(pnl_df_copula, aes(x = PnL)) +
-  geom_histogram(aes(y = after_stat(density)),
-                 binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) +
-  geom_density(color = "#E74C3C", linewidth = 0.8, adjust = 1) +
-  geom_vline(xintercept = VaR95_copula, color = "cyan", linewidth = 0.9) +
-  geom_vline(xintercept = ES95_copula,  color = "darkblue", linewidth = 0.9) +
-  annotate("text", x = VaR95_copula, y = Inf, 
-           label = paste0("VaR 95%: $", round(VaR95_copula, 2)),
-           color = "cyan", hjust = -0.1, vjust = 2, size = 3.5, fontface = "bold") +
-  annotate("text", x = ES95_copula, y = Inf,  
-           label = paste0("ES 95%: $",  round(ES95_copula, 2)),
-           color = "darkblue", hjust = -0.1, vjust = 4, size = 3.5, fontface = "bold") +
-  labs(title    = "P&L Distribution — Portfolio of European Call Options",
-       subtitle = paste0("10,000 scenarios | 5-day horizon | ",
-                         "VaR 95%: $", round(VaR95_copula, 2), 
-                         " | ES 95%: $", round(ES95_copula, 2)),
-       x = "P&L ($)", 
-       y = "Density",
-       caption = "Copula-marginal model — two risk drivers | Red curve: KDE (Silverman bandwidth)") +
-  theme_minimal(base_size = 12) +
-  theme(
-    plot.title    = element_text(face = "bold", size = 14),
-    plot.subtitle = element_text(color = "#566573", size = 10),
-    plot.caption  = element_text(color = "#566573", size = 9, hjust = 0),
-    panel.grid.minor = element_blank()
-  )
+<!-- pnl_distrib_plot_copula <- ggplot(pnl_df_copula, aes(x = PnL)) + -->
+<!--   geom_histogram(aes(y = after_stat(density)), -->
+<!--                  binwidth = 1, fill = "#2C3E50", color = "#AEB6BF", alpha = 0.85) + -->
+<!--   geom_density(color = "#E74C3C", linewidth = 0.8, adjust = 1) + -->
+<!--   geom_vline(xintercept = VaR95_copula, color = "cyan", linewidth = 0.9) + -->
+<!--   geom_vline(xintercept = ES95_copula,  color = "darkblue", linewidth = 0.9) + -->
+<!--   annotate("text", x = VaR95_copula, y = Inf, -->
+<!--            label = paste0("VaR 95%: $", round(VaR95_copula, 2)), -->
+<!--            color = "cyan", hjust = -0.1, vjust = 2, size = 3.5, fontface = "bold") + -->
+<!--   annotate("text", x = ES95_copula, y = Inf, -->
+<!--            label = paste0("ES 95%: $",  round(ES95_copula, 2)), -->
+<!--            color = "darkblue", hjust = -0.1, vjust = 4, size = 3.5, fontface = "bold") + -->
+<!--   labs(title    = "P&L Distribution — Portfolio of European Call Options", -->
+<!--        subtitle = paste0("10,000 scenarios | 5-day horizon | ", -->
+<!--                          "VaR 95%: $", round(VaR95_copula, 2), -->
+<!--                          " | ES 95%: $", round(ES95_copula, 2)), -->
+<!--        x = "P&L ($)", -->
+<!--        y = "Density", -->
+<!--        caption = "Copula-marginal model — two risk drivers | Red curve: KDE (Silverman bandwidth)") + -->
+<!--   theme_minimal(base_size = 12) + -->
+<!--   theme( -->
+<!--     plot.title    = element_text(face = "bold", size = 14), -->
+<!--     plot.subtitle = element_text(color = "#566573", size = 10), -->
+<!--     plot.caption  = element_text(color = "#566573", size = 9, hjust = 0), -->
+<!--     panel.grid.minor = element_blank() -->
+<!--   ) -->
 
-print(pnl_distrib_plot_copula)
+<!-- print(pnl_distrib_plot_copula) -->
 
-#Save plot in the output folder
-ggsave(filename = here("Outputs", "pnl_distribution_plot_copula.png"),
-       plot = pnl_distrib_plot_copula, width = 8, height = 5, dpi = 300)
-```
-
-
-
-##Volatility Surface
-
-Fit a volatility surface to the implied volatilities observed on the market (traded call and put options).
-Minimize the absolute distance between the market implied volatilities and the model implied volatilities.
-The parametric surface is given by:
-      σ(m, τ ) = α1 + α2(m − 1)2 + α3(m − 1)3 + α4√τ ,
-      
-where m = K/S is the moneyness and τ is the time to maturity of the option in years.
-```{r Prepare data for volatility surface fitting, message=FALSE, warning=FALSE}
-# Use only OTM calls and OTM puts for surface calibration
-options_data <- prepare_options_data_otm(
-  calls = calls,
-  puts = puts,
-  spot_price = last_trading_price
-)
-```
-
-```{r}
-# Fit the parametric surface on OTM quotes
-fit_surface <- fit_vol_surface_otm(
-  options_data = options_data,
-  last_volatility = last_volatility
-)
-
-alpha_hat <- fit_surface$alpha_hat
-print(alpha_hat)
-```
-
-```{r}
-# 3D visualization: fitted surface + market IV points (OTM)
-iv_surface_3d <- plot_vol_surface_3d(
-  options_data = options_data,
-  alpha_hat = alpha_hat,
-  output_path = here("Outputs", "iv_surface_3d.html")
-)
-
-iv_surface_3d
-```
-
-Re-price the portfolio using the parametric model. Once you have fitted the volatility surface, consider
-˜σ(m, τ ) = σ(m, τ ) − (α1 + α4) + VIXT , where VIXT is the VIX at time T . Use this for the pricing at
-time T . For the pricing at T + 5, consider ˜σ(m, τ ) = σ(m, τ ) − (α1 + α4) + VIXT +5 where VIXT +5 is
-obtained by simulation.
-
-```{r}
-# Re-price the portfolio using the fitted parametric surface sigma_hat(m, tau) (no VIX adjustment yet)
-surface_prices_sigma_hat_T <- portfolio_surface_prices_sigma_hat(
-  portfolio = portfolio,
-  alpha_hat = alpha_hat,
-  spot_price = last_trading_price,
-  rf_structure = rf_structure,
-  trading_days_in_year = trading_days_in_year,
-  horizon_days = 0
-)
-
-surface_prices_sigma_hat_T$portfolio_value
-```
+<!-- #Save plot in the output folder -->
+<!-- ggsave(filename = here("Outputs", "pnl_distribution_plot_copula.png"), -->
+<!--        plot = pnl_distrib_plot_copula, width = 8, height = 5, dpi = 300) -->
+<!-- ``` -->
 
 
-```{r}
-# Build adjusted volatility at time T for the portfolio (sigma to plug into BMS)
-surface_inputs_T <- portfolio_surface_inputs(
-  portfolio = portfolio,
-  alpha_hat = alpha_hat,
-  spot_price = last_trading_price,
-  vix_level = last_volatility,
-  trading_days_in_year = trading_days_in_year,
-  horizon_days = 0
-)
 
-surface_inputs_T
-```
+<!-- ##Volatility Surface -->
 
-```{r}
-# Vol surface P&L using bivariate Gaussian scenarios (spot + VIX)
-pnl_surface_biv <- calculate_pnl_vol_surface(
-  portfolio = portfolio,
-  alpha_hat = alpha_hat,
-  spot_T = last_trading_price,
-  vix_T = last_volatility,
-  rf_structure_T = rf_structure,
-  rf_structure_T_plus_h = rf_structure_forward,
-  trading_days_in_year = trading_days_in_year,
-  horizon_days = days_ahead,
-  spot_scenarios_T_plus_h = scenarios_asset_biv,
-  vix_scenarios_T_plus_h = scenarios_vix
-)
+<!-- Fit a volatility surface to the implied volatilities observed on the market (traded call and put options). -->
+<!-- Minimize the absolute distance between the market implied volatilities and the model implied volatilities. -->
+<!-- The parametric surface is given by: -->
+<!--       σ(m, τ ) = α1 + α2(m − 1)2 + α3(m − 1)3 + α4√τ , -->
 
-pnl_distribution_surface_biv <- pnl_surface_biv$pnl_distribution
-VaR95_surface_biv <- pnl_surface_biv$VaR95
-ES95_surface_biv  <- pnl_surface_biv$ES95
+<!-- where m = K/S is the moneyness and τ is the time to maturity of the option in years. -->
+<!-- ```{r Prepare data for volatility surface fitting, message=FALSE, warning=FALSE} -->
+<!-- # Use only OTM calls and OTM puts for surface calibration -->
+<!-- options_data <- prepare_options_data_otm( -->
+<!--   calls = calls, -->
+<!--   puts = puts, -->
+<!--   spot_price = last_trading_price -->
+<!-- ) -->
+<!-- ``` -->
 
-plot_pnl_vol_surface(
-  pnl_distribution = pnl_distribution_surface_biv,
-  VaR95 = VaR95_surface_biv,
-  ES95 = ES95_surface_biv,
-  horizon_days = days_ahead,
-  caption = "Vol surface model — VIX from bivariate Gaussian (spot + VIX jointly simulated)",
-  output_path = here("Outputs", "pnl_distribution_vol_surface_bivariate.png")
-)
-```
+<!-- ```{r} -->
+<!-- # Fit the parametric surface on OTM quotes -->
+<!-- fit_surface <- fit_vol_surface_otm( -->
+<!--   options_data = options_data, -->
+<!--   last_volatility = last_volatility -->
+<!-- ) -->
 
-===========================Annexe=================================
+<!-- alpha_hat <- fit_surface$alpha_hat -->
+<!-- print(alpha_hat) -->
+<!-- ``` -->
 
-```{r visualize the volatility surface, message=FALSE, warning=FALSE}
-# Cleaning filters — kept separate so options_data remains intact
-IV_MAX        <- 0.8
-MONEYNESS_MIN <- 0.7
-MONEYNESS_MAX <- 1.3
-CALL_M_MAX    <- 1.15
-PUT_M_MIN     <- 0.85
+<!-- ```{r} -->
+<!-- # 3D visualization: fitted surface + market IV points (OTM) -->
+<!-- iv_surface_3d <- plot_vol_surface_3d( -->
+<!--   options_data = options_data, -->
+<!--   alpha_hat = alpha_hat, -->
+<!--   output_path = here("Outputs", "iv_surface_3d.html") -->
+<!-- ) -->
 
-options_data_clean <- options_data %>%
-  filter(Implied_Volatility < IV_MAX,
-         Moneyness > MONEYNESS_MIN,
-         Moneyness < MONEYNESS_MAX)
+<!-- iv_surface_3d -->
+<!-- ``` -->
 
-options_data_calls <- options_data_clean %>% filter(Type == "Call", Moneyness < CALL_M_MAX)
-options_data_puts  <- options_data_clean %>% filter(Type == "Put",  Moneyness > PUT_M_MIN)
+<!-- Re-price the portfolio using the parametric model. Once you have fitted the volatility surface, consider -->
+<!-- ˜σ(m, τ ) = σ(m, τ ) − (α1 + α4) + VIXT , where VIXT is the VIX at time T . Use this for the pricing at -->
+<!-- time T . For the pricing at T + 5, consider ˜σ(m, τ ) = σ(m, τ ) − (α1 + α4) + VIXT +5 where VIXT +5 is -->
+<!-- obtained by simulation. -->
 
-# Shared fitted surface grid
-f_make_surface_grid <- function(data) {
-  moneyness_grid <- seq(min(data$Moneyness), max(data$Moneyness), length.out = 50)
-  tau_grid       <- seq(min(data$Tau),       max(data$Tau),       length.out = 50)
-  surface_grid   <- outer(moneyness_grid, tau_grid, function(m, tau) f_vol_surface(alpha_hat, m, tau))
-  list(m = moneyness_grid, tau = tau_grid, z = surface_grid)
-}
+<!-- ```{r} -->
+<!-- # Re-price the portfolio using the fitted parametric surface sigma_hat(m, tau) (no VIX adjustment yet) -->
+<!-- surface_prices_sigma_hat_T <- portfolio_surface_prices_sigma_hat( -->
+<!--   portfolio = portfolio, -->
+<!--   alpha_hat = alpha_hat, -->
+<!--   spot_price = last_trading_price, -->
+<!--   rf_structure = rf_structure, -->
+<!--   trading_days_in_year = trading_days_in_year, -->
+<!--   horizon_days = 0 -->
+<!-- ) -->
 
-# Shared plot builder
-f_vol_surface_plot <- function(data, title) {
-  grid <- f_make_surface_grid(data)
-  plot_ly() %>%
-    add_surface(
-      x = grid$m, y = grid$tau, z = t(grid$z),
-      opacity    = 0.6,
-      colorscale = list(c(0, 1), c("#2C3E50", "#E74C3C")),
-      showscale  = FALSE,
-      name       = "Fitted Surface"
-    ) %>%
-    add_trace(
-      data = data,
-      x = ~Moneyness, y = ~Tau, z = ~Implied_Volatility,
-      type = "scatter3d", mode = "markers",
-      marker = list(
-        size       = 2,
-        color      = ~Implied_Volatility,
-        colorscale = list(c(0, 1), c("#AEB6BF", "#E74C3C")),
-        showscale  = TRUE,
-        colorbar   = list(title = "IV")
-      ),
-      name = "Market IV"
-    ) %>%
-    layout(
-      title = title,
-      scene = list(
-        xaxis  = list(title = "Moneyness (K/S)"),
-        yaxis  = list(title = "Tau (years)"),
-        zaxis  = list(title = "Implied Volatility"),
-        camera = list(eye = list(x = 1.8, y = -1.8, z = 0.8))
-      )
-    )
-}
+<!-- surface_prices_sigma_hat_T$portfolio_value -->
+<!-- ``` -->
 
-vol_surface_calls <- f_vol_surface_plot(options_data_calls, "Implied Volatility Surface — Calls")
-vol_surface_puts  <- f_vol_surface_plot(options_data_puts,  "Implied Volatility Surface — Puts")
 
-vol_surface_calls
-vol_surface_puts
-```
+<!-- ```{r} -->
+<!-- # Build adjusted volatility at time T for the portfolio (sigma to plug into BMS) -->
+<!-- surface_inputs_T <- portfolio_surface_inputs( -->
+<!--   portfolio = portfolio, -->
+<!--   alpha_hat = alpha_hat, -->
+<!--   spot_price = last_trading_price, -->
+<!--   vix_level = last_volatility, -->
+<!--   trading_days_in_year = trading_days_in_year, -->
+<!--   horizon_days = 0 -->
+<!-- ) -->
+
+<!-- surface_inputs_T -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- # Vol surface P&L using bivariate Gaussian scenarios (spot + VIX) -->
+<!-- pnl_surface_biv <- calculate_pnl_vol_surface( -->
+<!--   portfolio = portfolio, -->
+<!--   alpha_hat = alpha_hat, -->
+<!--   spot_T = last_trading_price, -->
+<!--   vix_T = last_volatility, -->
+<!--   rf_structure_T = rf_structure, -->
+<!--   rf_structure_T_plus_h = rf_structure_forward, -->
+<!--   trading_days_in_year = trading_days_in_year, -->
+<!--   horizon_days = days_ahead, -->
+<!--   spot_scenarios_T_plus_h = scenarios_asset_biv, -->
+<!--   vix_scenarios_T_plus_h = scenarios_vix -->
+<!-- ) -->
+
+<!-- pnl_distribution_surface_biv <- pnl_surface_biv$pnl_distribution -->
+<!-- VaR95_surface_biv <- pnl_surface_biv$VaR95 -->
+<!-- ES95_surface_biv  <- pnl_surface_biv$ES95 -->
+
+<!-- plot_pnl_vol_surface( -->
+<!--   pnl_distribution = pnl_distribution_surface_biv, -->
+<!--   VaR95 = VaR95_surface_biv, -->
+<!--   ES95 = ES95_surface_biv, -->
+<!--   horizon_days = days_ahead, -->
+<!--   caption = "Vol surface model — VIX from bivariate Gaussian (spot + VIX jointly simulated)", -->
+<!--   output_path = here("Outputs", "pnl_distribution_vol_surface_bivariate.png") -->
+<!-- ) -->
+<!-- ``` -->
+
+<!-- ===========================Annexe================================= -->
+
+<!-- ```{r visualize the volatility surface, message=FALSE, warning=FALSE} -->
+<!-- # Cleaning filters — kept separate so options_data remains intact -->
+<!-- IV_MAX        <- 0.8 -->
+<!-- MONEYNESS_MIN <- 0.7 -->
+<!-- MONEYNESS_MAX <- 1.3 -->
+<!-- CALL_M_MAX    <- 1.15 -->
+<!-- PUT_M_MIN     <- 0.85 -->
+
+<!-- options_data_clean <- options_data %>% -->
+<!--   filter(Implied_Volatility < IV_MAX, -->
+<!--          Moneyness > MONEYNESS_MIN, -->
+<!--          Moneyness < MONEYNESS_MAX) -->
+
+<!-- options_data_calls <- options_data_clean %>% filter(Type == "Call", Moneyness < CALL_M_MAX) -->
+<!-- options_data_puts  <- options_data_clean %>% filter(Type == "Put",  Moneyness > PUT_M_MIN) -->
+
+<!-- # Shared fitted surface grid -->
+<!-- f_make_surface_grid <- function(data) { -->
+<!--   moneyness_grid <- seq(min(data$Moneyness), max(data$Moneyness), length.out = 50) -->
+<!--   tau_grid       <- seq(min(data$Tau),       max(data$Tau),       length.out = 50) -->
+<!--   surface_grid   <- outer(moneyness_grid, tau_grid, function(m, tau) f_vol_surface(alpha_hat, m, tau)) -->
+<!--   list(m = moneyness_grid, tau = tau_grid, z = surface_grid) -->
+<!-- } -->
+
+<!-- # Shared plot builder -->
+<!-- f_vol_surface_plot <- function(data, title) { -->
+<!--   grid <- f_make_surface_grid(data) -->
+<!--   plot_ly() %>% -->
+<!--     add_surface( -->
+<!--       x = grid$m, y = grid$tau, z = t(grid$z), -->
+<!--       opacity    = 0.6, -->
+<!--       colorscale = list(c(0, 1), c("#2C3E50", "#E74C3C")), -->
+<!--       showscale  = FALSE, -->
+<!--       name       = "Fitted Surface" -->
+<!--     ) %>% -->
+<!--     add_trace( -->
+<!--       data = data, -->
+<!--       x = ~Moneyness, y = ~Tau, z = ~Implied_Volatility, -->
+<!--       type = "scatter3d", mode = "markers", -->
+<!--       marker = list( -->
+<!--         size       = 2, -->
+<!--         color      = ~Implied_Volatility, -->
+<!--         colorscale = list(c(0, 1), c("#AEB6BF", "#E74C3C")), -->
+<!--         showscale  = TRUE, -->
+<!--         colorbar   = list(title = "IV") -->
+<!--       ), -->
+<!--       name = "Market IV" -->
+<!--     ) %>% -->
+<!--     layout( -->
+<!--       title = title, -->
+<!--       scene = list( -->
+<!--         xaxis  = list(title = "Moneyness (K/S)"), -->
+<!--         yaxis  = list(title = "Tau (years)"), -->
+<!--         zaxis  = list(title = "Implied Volatility"), -->
+<!--         camera = list(eye = list(x = 1.8, y = -1.8, z = 0.8)) -->
+<!--       ) -->
+<!--     ) -->
+<!-- } -->
+
+<!-- vol_surface_calls <- f_vol_surface_plot(options_data_calls, "Implied Volatility Surface — Calls") -->
+<!-- vol_surface_puts  <- f_vol_surface_plot(options_data_puts,  "Implied Volatility Surface — Puts") -->
+
+<!-- vol_surface_calls -->
+<!-- vol_surface_puts -->
+<!-- ``` -->
