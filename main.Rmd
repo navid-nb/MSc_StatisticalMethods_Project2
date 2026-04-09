@@ -1,21 +1,23 @@
 ---
 title: "TP2 - MATH60633A.H2026 - Statistical Methods for Financial Data "
 author: 
-
+  - "Francis Mazzone"
   - "Navid Namazi Baigi"
   - "Venkat Narayana Ramakrishnan"
-  
+  - "Emilien Vaast"
 date: "`r Sys.Date()`"
 output: 
   html_document:
     code_folding: "show"
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 set.seed(123)
 ```
-
 
 ```{r libraries, message=FALSE, echo= TRUE}
 # Load necessary libraries
@@ -119,19 +121,27 @@ knitr::kable(portfolio)
 
 ### Methodology: MLE Estimation and Time Scaling (same logic used for the bivariate model)
 
-**Parameter Estimation:** Using closed-form maximum likelihood estimators:
+**Parameter Estimation:** Using closed-form maximum likelihood
+estimators:
 
-- **Mean**: $\hat{\mu} = \frac{1}{n}\sum_{i=1}^{n} R_i$ (=sample mean)
+-   **Mean**: $\hat{\mu} = \frac{1}{n}\sum_{i=1}^{n} R_i$ (=sample mean)
 
-- **Variance (MLE)**: $\hat{\sigma}^2 = \frac{1}{n}\sum_{i=1}^{n} (R_i - \hat{\mu})^2$ ( = sample variance $\times \frac{n-1}{n}$)
+-   **Variance (MLE)**:
+    $\hat{\sigma}^2 = \frac{1}{n}\sum_{i=1}^{n} (R_i - \hat{\mu})^2$ ( =
+    sample variance $\times \frac{n-1}{n}$)
 
-
-**Time-Scaling for Horizon T:** For independent daily returns, the cumulative T-day log-return follows:
+**Time-Scaling for Horizon T:** For independent daily returns, the
+cumulative T-day log-return follows:
 $$\sum_{t=1}^{T} R_t \sim N(T \cdot \mu, T \cdot \sigma^2)$$
 
-Therefore, we generate scenarios from $N(T \cdot \hat{\mu}, T \cdot \hat{\sigma})$ and convert to terminal prices via $S_T = S_0 \cdot e^{\text{cum_log_return}}$.
+Therefore, we generate scenarios from
+$N(T \cdot \hat{\mu}, T \cdot \hat{\sigma})$ and convert to terminal
+prices via $S_T = S_0 \cdot e^{\text{cum_log_return}}$.
 
-**Note:** At t=5, the original interest rates quoted at t=0 are converted to forward rates for accurate option revaluation. We derive the forward curve from the original term structure, which accounts for the time passage and ensures correct discounting of future cash flows.
+**Note:** At t=5, the original interest rates quoted at t=0 are
+converted to forward rates for accurate option revaluation. We derive
+the forward curve from the original term structure, which accounts for
+the time passage and ensures correct discounting of future cash flows.
 
 ```{r}
 #Computing the log-returns
@@ -163,9 +173,17 @@ knitr::kable(data.frame(
 ), caption = "MLE Estimates for Daily Log-Returns of the Underlying Asset:")
 ```
 
-
-To complement the frequency histograms below, we overlay a kernel density estimate (KDE) on each P&L distribution. The KDE is computed with Silverman's rule-of-thumb bandwidth and places a smooth kernel (Gaussian by default in `geom_density`) at each observation, then sums the contributions. The resulting curve gives a continuous reading of the distribution shape and makes it easier to compare across models. The main caveat is that smoothing is indifferent to the underlying data structure: a wide bandwidth will wash out genuine secondary modes or sharp asymmetries that the raw histogram would reveal. We therefore keep the histogram as the primary visual and treat the density curve as a reading aid, not a replacement.
-
+To complement the frequency histograms below, we overlay a kernel
+density estimate (KDE) on each P&L distribution. The KDE is computed
+with Silverman's rule-of-thumb bandwidth and places a smooth kernel
+(Gaussian by default in `geom_density`) at each observation, then sums
+the contributions. The resulting curve gives a continuous reading of the
+distribution shape and makes it easier to compare across models. The
+main caveat is that smoothing is indifferent to the underlying data
+structure: a wide bandwidth will wash out genuine secondary modes or
+sharp asymmetries that the raw histogram would reveal. We therefore keep
+the histogram as the primary visual and treat the density curve as a
+reading aid, not a replacement.
 
 ```{r}
 
@@ -197,10 +215,8 @@ pnl_distrib_plot <- plot_pnl_univariate(
 
 ```
 
-
-
-
 ## Two risk drivers and bivariate Gaussian model
+
 ```{r}
 
 # Compute log-returns for the volatility index
@@ -265,19 +281,29 @@ pnl_distrib_plot <- plot_pnl_bivariate(
 
 ## Comparison of Univariate vs Bivariate Models: Impact of Volatility Correlation
 
-The bivariate model captures a key market dynamic: the negative correlation between equity returns and implied volatility. This creates a natural hedging benefit for long call portfolios:
+The bivariate model captures a key market dynamic: the negative
+correlation between equity returns and implied volatility. This creates
+a natural hedging benefit for long call portfolios:
 
-- **Delta Effect**: Long calls are delta-positive → losses occur when S&P 500 declines
-- **Vega Effect**: Long calls are vega-positive → gains occur when volatility increases
-- **Market Structure**: During equity downturns, volatility (VIX) typically spikes (sp500 returns are negatively correlated with vix returns) 
-- **Result**: When adverse equity scenarios occur (S&P down), the simultaneous VIX increase partially offsets the losses through vega gains
+-   **Delta Effect**: Long calls are delta-positive → losses occur when
+    S&P 500 declines
+-   **Vega Effect**: Long calls are vega-positive → gains occur when
+    volatility increases
+-   **Market Structure**: During equity downturns, volatility (VIX)
+    typically spikes (sp500 returns are negatively correlated with vix
+    returns)
+-   **Result**: When adverse equity scenarios occur (S&P down), the
+    simultaneous VIX increase partially offsets the losses through vega
+    gains
 
-This natural hedging mechanism causes the bivariate model's risk metrics (VaR, ES) to be less negative (higher value) compared to the univariate model, where volatility is held artificially constant.
-
+This natural hedging mechanism causes the bivariate model's risk metrics
+(VaR, ES) to be less negative (higher value) compared to the univariate
+model, where volatility is held artificially constant.
 
 ## Two risk drivers and copula-marginal model (Student-t and Gaussian copula)
 
 ### Step 1: Fit Student-t marginal distributions to each series separately
+
 ```{r}
 df_asset <- 10
 df_vix <- 5
@@ -308,6 +334,7 @@ knitr::kable(data.frame(
 ```
 
 ### Step 2: Transform each series to uniform [0,1] space via thier CDFs and Fit Gaussian Copula
+
 ```{r}
 # Apply Student-t CDF with estimated parameters to transform to uniform samples
 # pt() expects standardized input: (x - location) / scale
@@ -332,8 +359,8 @@ copula_correlation <- coef(fit_copula)
 cat("Estimated Gaussian Copula Correlation: ", round(copula_correlation, 6), "\n")
 ```
 
-
 ### Step 3: Simulate from copula-marginal model for 5-day horizon
+
 ```{r}
 # Generate 5 days of returns for each scenario from the fitted Gaussian copula
 # We need 5 * number_of_scenarios
@@ -380,9 +407,10 @@ pnl_distrib_plot <- plot_pnl_copula(
 
 ```
 
----
+------------------------------------------------------------------------
 
 ### Plots: Joint distribution, joint uniforms(pseudo data)- not required in the assignment (just for visualization and sanity check of the copula fit)
+
 ```{r, fig.width=14, fig.height=12}
 copula_diag_plot <- plot_copula_fit_diagnostics(
   daily_log_returns = daily_log_returns,
@@ -401,15 +429,17 @@ copula_diag_plot <- plot_copula_fit_diagnostics(
 )
 ```
 
-
 ## Volatility Surface
 
-Fit a volatility surface to the implied volatilities observed on the market (traded call and put options).
-Minimize the absolute distance between the market implied volatilities and the model implied volatilities.
-The parametric surface is given by:
-      σ(m, τ ) = α1 + α2(m − 1)2 + α3(m − 1)3 + α4√τ ,
+Fit a volatility surface to the implied volatilities observed on the
+market (traded call and put options). Minimize the absolute distance
+between the market implied volatilities and the model implied
+volatilities. The parametric surface is given by: σ(m, τ ) = α1 + α2(m −
+1)2 + α3(m − 1)3 + α4√τ ,
 
-where m = K/S is the moneyness and τ is the time to maturity of the option in years.
+where m = K/S is the moneyness and τ is the time to maturity of the
+option in years.
+
 ```{r Prepare data for volatility surface fitting, message=FALSE, warning=FALSE}
 # Use only OTM calls and OTM puts for surface calibration
 options_data <- prepare_options_data_otm(
@@ -441,10 +471,11 @@ iv_surface_3d <- plot_vol_surface_3d(
 iv_surface_3d
 ```
 
-Re-price the portfolio using the parametric model. Once you have fitted the volatility surface, consider
-˜σ(m, τ ) = σ(m, τ ) − (α1 + α4) + VIXT , where VIXT is the VIX at time T . Use this for the pricing at
-time T . For the pricing at T + 5, consider ˜σ(m, τ ) = σ(m, τ ) − (α1 + α4) + VIXT +5 where VIXT +5 is
-obtained by simulation.
+Re-price the portfolio using the parametric model. Once you have fitted
+the volatility surface, consider ˜σ(m, τ ) = σ(m, τ ) − (α1 + α4) + VIXT
+, where VIXT is the VIX at time T . Use this for the pricing at time T .
+For the pricing at T + 5, consider ˜σ(m, τ ) = σ(m, τ ) − (α1 + α4) +
+VIXT +5 where VIXT +5 is obtained by simulation.
 
 ```{r}
 # Re-price the portfolio using the fitted parametric surface sigma_hat(m, tau) (no VIX adjustment yet)
@@ -459,7 +490,6 @@ surface_prices_sigma_hat_T <- portfolio_surface_prices_sigma_hat(
 
 surface_prices_sigma_hat_T$portfolio_value
 ```
-
 
 ```{r}
 # Build adjusted volatility at time T for the portfolio (sigma to plug into BMS)
