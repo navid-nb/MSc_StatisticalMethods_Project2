@@ -505,6 +505,10 @@ surface_inputs_T <- portfolio_surface_inputs(
 surface_inputs_T
 ```
 
+Finally, compute the P&L distribution of the portfolio at T + 5 using the
+volatility surface model with VIX adjustment, where the VIX scenarios are
+simulated jointly with the spot using the bivariate Gaussian model. Compare
+the results with the previous models.
 ```{r}
 # Vol surface P&L using bivariate Gaussian scenarios (spot + VIX)
 pnl_surface_biv <- calculate_pnl_vol_surface(
@@ -533,3 +537,43 @@ plot_pnl_vol_surface(
   output_path = here("Outputs", "pnl_distribution_vol_surface_bivariate.png")
 )
 ```
+A notable point to highlight is how both the VaR and ES metrics for the volatility surface model with VIX adjustment (bivariate Gaussian scenarios) are lower (more negative) than those from the pure bivariate Gaussian model without the surface. This indicates that incorporating the volatility surface and its interaction with VIX scenarios leads to a more conservative risk estimate, reflecting the additional risk captured by the surface's ability to model volatility smiles and skews, as well as the dynamic relationship between spot and volatility.
+
+```{r}
+# What is the sign of σ~ − VIX(t) for each options? 
+# If it is negative for all four, the surface model says the market prices our 
+# calls with less vol than the VIX would suggest, and our results would follow 
+# directly from that.
+directional_vol <- surface_inputs_T$Adjusted_Sigma - rep(as.numeric(last_volatility), 4)
+
+knitr::kable(data.frame(
+  Option          = paste0("K=", portfolio$Strike_Price, " / ", portfolio$Maturity_days, "d"),
+  Fitted_IV       = round(surface_inputs_T$Fitted_IV, 4),
+  Adjusted_Sigma  = round(surface_inputs_T$Adjusted_Sigma, 4),
+  VIX_Level       = round(as.numeric(last_volatility), 4),
+  Directional_Vol = round(directional_vol, 4)
+), caption = "Surface vs Flat VIX: adjusted sigma minus VIX level per option")
+```
+
+All four options have Directional_Vol > 0, meaning the surface model prices them
+with more volatility than the flat VIX. The surface is adding roughly 5-6 vol 
+points on top of the VIX level for our specific strikes and maturity in portfolio.
+This means the surface model should produce higher option values at both T and
+T+5 compared to the bivariate model — and therefore a wider, more negative P&L 
+distribution. 
+
+
+```{r}
+
+cat("Bivariate inception value:     ", portfolio_value_inception, "\n")
+cat("Surface inception value:       ", pnl_surface_biv$value_T, "\n")
+cat("Difference:                    ", pnl_surface_biv$value_T - portfolio_value_inception, "\n")
+
+```
+
+The market prices our OTM calls with more implied volatility than the VIX suggests.
+The VIX is essentially an ATM volatility measure. Our portfolio holds calls 
+struck above the money, and the surface captures the fact that OTM calls carry a
+vol premium above ATM in this market — the right side of the smile. 
+The bivariate model, by using the VIX flat, was "underpricing" our specific book
+at inception.
